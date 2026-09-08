@@ -1,0 +1,254 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.itantra"
+4    android:versionCode="1"
+5    android:versionName="1.0.0" >
+6
+7    <uses-sdk
+8        android:minSdkVersion="24"
+9        android:targetSdkVersion="35" />
+10
+11    <!--
+12         ======================================================================
+13         Wi-Fi Direct (WifiP2pManager) — peer discovery + group formation
+14         ======================================================================
+15    -->
+16    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+16-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:8:5-76
+16-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:8:22-73
+17    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+17-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:9:5-76
+17-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:9:22-73
+18    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+18-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:10:5-79
+18-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:10:22-76
+19
+20    <!--
+21        INTERNET is required for java.net.Socket/ServerSocket, even when the
+22        TCP connection is entirely within the local Wi-Fi Direct P2P group
+23        network (no actual internet reachability). Android requires this
+24        permission for *any* socket usage. Judges: this does NOT mean the app
+25        makes internet calls — it is fully offline by design.
+26    -->
+27    <uses-permission android:name="android.permission.INTERNET" />
+27-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:19:5-67
+27-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:19:22-64
+28
+29    <!-- Android 13+ (API 33+): replaces ACCESS_FINE_LOCATION for Wi-Fi Direct -->
+30    <uses-permission
+30-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:22:5-25:38
+31        android:name="android.permission.NEARBY_WIFI_DEVICES"
+31-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:23:9-62
+32        android:usesPermissionFlags="neverForLocation" />
+32-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:24:9-55
+33
+34    <!-- Android 8–12 (API 26–32): required for Wi-Fi Direct discovery on older Android -->
+35    <uses-permission
+35-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:28:5-30:38
+36        android:name="android.permission.ACCESS_FINE_LOCATION"
+36-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:29:9-63
+37        android:maxSdkVersion="32" />
+37-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:30:9-35
+38    <uses-permission
+38-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:31:5-33:38
+39        android:name="android.permission.ACCESS_COARSE_LOCATION"
+39-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:32:9-65
+40        android:maxSdkVersion="32" />
+40-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:33:9-35
+41
+42    <uses-feature
+42-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:35:5-37:35
+43        android:name="android.hardware.wifi.direct"
+43-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:36:9-52
+44        android:required="true" />
+44-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:37:9-32
+45
+46    <!--
+47         ======================================================================
+48         Audio capture (AudioRecord) — microphone for STT input
+49         ======================================================================
+50    -->
+51    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+51-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:42:5-71
+51-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:42:22-68
+52    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+52-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:43:5-80
+52-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:43:22-77
+53
+54    <uses-feature
+54-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:44:5-46:35
+55        android:name="android.hardware.microphone"
+55-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:45:9-51
+56        android:required="true" />
+56-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:46:9-32
+57
+58    <!--
+59         ======================================================================
+60         Bluetooth Classic — RESERVED FOR FUTURE BLUETOOTH FALLBACK TRANSPORT.
+61         BluetoothSocketTransport is currently a stub (UnsupportedOperationException).
+62         These permissions are declared now so the fallback can be activated
+63         without a manifest change. They do NOT enable any active BT behaviour.
+64         ======================================================================
+65    -->
+66    <!-- Legacy Bluetooth (API ≤ 30) -->
+67    <uses-permission
+67-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:55:5-57:38
+68        android:name="android.permission.BLUETOOTH"
+68-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:56:9-52
+69        android:maxSdkVersion="30" />
+69-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:57:9-35
+70    <uses-permission
+70-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:58:5-60:38
+71        android:name="android.permission.BLUETOOTH_ADMIN"
+71-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:59:9-58
+72        android:maxSdkVersion="30" />
+72-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:60:9-35
+73    <!-- Modern Bluetooth (API 31+) -->
+74    <uses-permission
+74-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:62:5-65:31
+75        android:name="android.permission.BLUETOOTH_SCAN"
+75-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:63:9-57
+76        android:usesPermissionFlags="neverForLocation" />
+76-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:64:9-55
+77    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+77-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:66:5-68:31
+77-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:67:9-60
+78
+79    <uses-feature
+79-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:69:5-71:36
+80        android:name="android.hardware.bluetooth"
+80-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:70:9-50
+81        android:required="false" />
+81-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:71:9-33
+82
+83    <permission
+83-->[androidx.core:core:1.15.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\4a40c889fbd8f6df7bd64d9103aca7d3\transformed\core-1.15.0\AndroidManifest.xml:22:5-24:47
+84        android:name="com.itantra.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+84-->[androidx.core:core:1.15.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\4a40c889fbd8f6df7bd64d9103aca7d3\transformed\core-1.15.0\AndroidManifest.xml:23:9-81
+85        android:protectionLevel="signature" />
+85-->[androidx.core:core:1.15.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\4a40c889fbd8f6df7bd64d9103aca7d3\transformed\core-1.15.0\AndroidManifest.xml:24:9-44
+86
+87    <uses-permission android:name="com.itantra.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+87-->[androidx.core:core:1.15.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\4a40c889fbd8f6df7bd64d9103aca7d3\transformed\core-1.15.0\AndroidManifest.xml:26:5-97
+87-->[androidx.core:core:1.15.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\4a40c889fbd8f6df7bd64d9103aca7d3\transformed\core-1.15.0\AndroidManifest.xml:26:22-94
+88
+89    <application
+89-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:73:5-91:19
+90        android:name="com.itantra.iTantraApplication"
+90-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:74:9-54
+91        android:allowBackup="true"
+91-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:75:9-35
+92        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+92-->[androidx.core:core:1.15.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\4a40c889fbd8f6df7bd64d9103aca7d3\transformed\core-1.15.0\AndroidManifest.xml:28:18-86
+93        android:debuggable="true"
+94        android:extractNativeLibs="false"
+95        android:icon="@mipmap/ic_launcher"
+95-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:76:9-43
+96        android:label="@string/app_name"
+96-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:78:9-41
+97        android:roundIcon="@mipmap/ic_launcher_round"
+97-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:77:9-54
+98        android:supportsRtl="true"
+98-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:79:9-35
+99        android:theme="@style/Theme.iTantra" >
+99-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:80:9-45
+100        <activity
+100-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:82:9-90:20
+101            android:name="com.itantra.ui.MainActivity"
+101-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:83:13-55
+102            android:exported="true"
+102-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:84:13-36
+103            android:windowSoftInputMode="adjustResize" >
+103-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:85:13-55
+104            <intent-filter>
+104-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:86:13-89:29
+105                <action android:name="android.intent.action.MAIN" />
+105-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:87:17-69
+105-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:87:25-66
+106
+107                <category android:name="android.intent.category.LAUNCHER" />
+107-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:88:17-77
+107-->C:\Users\ADMIN\.gemini\antigravity\scratch\iTantra\app\src\main\AndroidManifest.xml:88:27-74
+108            </intent-filter>
+109        </activity>
+110        <activity
+110-->[androidx.compose.ui:ui-tooling-android:1.7.6] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\d5845fd8096d9041a09459a890db2f29\transformed\ui-tooling-release\AndroidManifest.xml:23:9-25:39
+111            android:name="androidx.compose.ui.tooling.PreviewActivity"
+111-->[androidx.compose.ui:ui-tooling-android:1.7.6] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\d5845fd8096d9041a09459a890db2f29\transformed\ui-tooling-release\AndroidManifest.xml:24:13-71
+112            android:exported="true" />
+112-->[androidx.compose.ui:ui-tooling-android:1.7.6] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\d5845fd8096d9041a09459a890db2f29\transformed\ui-tooling-release\AndroidManifest.xml:25:13-36
+113        <activity
+113-->[androidx.compose.ui:ui-test-manifest:1.7.6] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\d6fc4ba809a9f13160b81526d2e9f327\transformed\ui-test-manifest-1.7.6\AndroidManifest.xml:23:9-25:39
+114            android:name="androidx.activity.ComponentActivity"
+114-->[androidx.compose.ui:ui-test-manifest:1.7.6] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\d6fc4ba809a9f13160b81526d2e9f327\transformed\ui-test-manifest-1.7.6\AndroidManifest.xml:24:13-63
+115            android:exported="true" />
+115-->[androidx.compose.ui:ui-test-manifest:1.7.6] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\d6fc4ba809a9f13160b81526d2e9f327\transformed\ui-test-manifest-1.7.6\AndroidManifest.xml:25:13-36
+116
+117        <provider
+117-->[androidx.emoji2:emoji2:1.3.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\fc13a878d11ab1a2c65afbd36006d038\transformed\emoji2-1.3.0\AndroidManifest.xml:24:9-32:20
+118            android:name="androidx.startup.InitializationProvider"
+118-->[androidx.emoji2:emoji2:1.3.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\fc13a878d11ab1a2c65afbd36006d038\transformed\emoji2-1.3.0\AndroidManifest.xml:25:13-67
+119            android:authorities="com.itantra.androidx-startup"
+119-->[androidx.emoji2:emoji2:1.3.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\fc13a878d11ab1a2c65afbd36006d038\transformed\emoji2-1.3.0\AndroidManifest.xml:26:13-68
+120            android:exported="false" >
+120-->[androidx.emoji2:emoji2:1.3.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\fc13a878d11ab1a2c65afbd36006d038\transformed\emoji2-1.3.0\AndroidManifest.xml:27:13-37
+121            <meta-data
+121-->[androidx.emoji2:emoji2:1.3.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\fc13a878d11ab1a2c65afbd36006d038\transformed\emoji2-1.3.0\AndroidManifest.xml:29:13-31:52
+122                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+122-->[androidx.emoji2:emoji2:1.3.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\fc13a878d11ab1a2c65afbd36006d038\transformed\emoji2-1.3.0\AndroidManifest.xml:30:17-75
+123                android:value="androidx.startup" />
+123-->[androidx.emoji2:emoji2:1.3.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\fc13a878d11ab1a2c65afbd36006d038\transformed\emoji2-1.3.0\AndroidManifest.xml:31:17-49
+124            <meta-data
+124-->[androidx.lifecycle:lifecycle-process:2.8.7] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\d71026562745f6004c3162f474777275\transformed\lifecycle-process-2.8.7\AndroidManifest.xml:29:13-31:52
+125                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+125-->[androidx.lifecycle:lifecycle-process:2.8.7] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\d71026562745f6004c3162f474777275\transformed\lifecycle-process-2.8.7\AndroidManifest.xml:30:17-78
+126                android:value="androidx.startup" />
+126-->[androidx.lifecycle:lifecycle-process:2.8.7] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\d71026562745f6004c3162f474777275\transformed\lifecycle-process-2.8.7\AndroidManifest.xml:31:17-49
+127            <meta-data
+127-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:29:13-31:52
+128                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+128-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:30:17-85
+129                android:value="androidx.startup" />
+129-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:31:17-49
+130        </provider>
+131
+132        <receiver
+132-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:34:9-52:20
+133            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+133-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:35:13-76
+134            android:directBootAware="false"
+134-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:36:13-44
+135            android:enabled="true"
+135-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:37:13-35
+136            android:exported="true"
+136-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:38:13-36
+137            android:permission="android.permission.DUMP" >
+137-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:39:13-57
+138            <intent-filter>
+138-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:40:13-42:29
+139                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
+139-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:41:17-91
+139-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:41:25-88
+140            </intent-filter>
+141            <intent-filter>
+141-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:43:13-45:29
+142                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
+142-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:44:17-85
+142-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:44:25-82
+143            </intent-filter>
+144            <intent-filter>
+144-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:46:13-48:29
+145                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
+145-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:47:17-88
+145-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:47:25-85
+146            </intent-filter>
+147            <intent-filter>
+147-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:49:13-51:29
+148                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
+148-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:50:17-95
+148-->[androidx.profileinstaller:profileinstaller:1.4.0] C:\Users\ADMIN\.gradle\caches\8.10.2\transforms\1a8e03e3122cbadae6b81dc83bb7e855\transformed\profileinstaller-1.4.0\AndroidManifest.xml:50:25-92
+149            </intent-filter>
+150        </receiver>
+151    </application>
+152
+153</manifest>

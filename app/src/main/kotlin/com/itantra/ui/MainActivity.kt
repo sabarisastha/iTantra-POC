@@ -1,0 +1,93 @@
+﻿package com.itantra.ui
+
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
+import com.itantra.iTantraApplication
+import com.itantra.ui.theme.iTantraTheme
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+
+class MainActivity : ComponentActivity() {
+
+    private val app get() = application as iTantraApplication
+    
+    val permissionsGranted = MutableStateFlow(false)
+
+    private val permissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        val denied = results.filterValues { !it }.keys
+        if (denied.isNotEmpty()) {
+            android.util.Log.w("MainActivity", "Permissions denied: $denied")
+        } else {
+            permissionsGranted.value = true
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        requestRequiredPermissions()
+
+        setContent {
+            iTantraTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color    = MaterialTheme.colorScheme.background,
+                ) {
+                    MainNavGraph(
+                        transport         = app.transport,
+                        sessionController = app.sessionController,
+                        permissionsGranted = permissionsGranted
+                    )
+                }
+            }
+        }
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        app.transport.shutdown()
+        app.sessionController.shutdown()
+    }
+
+    private fun requestRequiredPermissions() {
+        val perms = mutableListOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.ACCESS_WIFI_STATE,
+            Manifest.permission.CHANGE_WIFI_STATE,
+            Manifest.permission.CHANGE_NETWORK_STATE,
+            Manifest.permission.MODIFY_AUDIO_SETTINGS,
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            perms += Manifest.permission.NEARBY_WIFI_DEVICES
+        } else {
+            perms += Manifest.permission.ACCESS_FINE_LOCATION
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            perms += Manifest.permission.BLUETOOTH_SCAN
+            perms += Manifest.permission.BLUETOOTH_CONNECT
+        } else {
+            @Suppress("DEPRECATION")
+            perms += Manifest.permission.BLUETOOTH
+            @Suppress("DEPRECATION")
+            perms += Manifest.permission.BLUETOOTH_ADMIN
+        }
+        
+        val denied = perms.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+        if (denied.isEmpty()) {
+            permissionsGranted.value = true
+        } else {
+            permissionLauncher.launch(perms.toTypedArray())
+        }
+    }
+}
