@@ -1,11 +1,13 @@
-﻿package com.itantra.ui.home
+package com.itantra.ui.home
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.WifiFind
@@ -17,28 +19,49 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.itantra.model.ModelManager
+import com.itantra.model.ModelState
 import com.itantra.session.SessionController
 import com.itantra.session.SupportedLanguage
 import com.itantra.transport.ConnectionState
 import com.itantra.transport.DiscoveredDevice
 import com.itantra.transport.TransportChannel
 import kotlinx.coroutines.flow.StateFlow
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HomeScreen(
     transport: TransportChannel,
     sessionController: SessionController,
+    modelManager: ModelManager,
     onNavigateToSession: () -> Unit,
     permissionsGranted: StateFlow<Boolean>,
-    vm: HomeViewModel = viewModel(factory = HomeViewModel.factory(transport, sessionController, permissionsGranted)),
+    vm: HomeViewModel = viewModel(factory = HomeViewModel.factory(transport, sessionController, modelManager, permissionsGranted)),
 ) {
     val state    by vm.connectionState.collectAsStateWithLifecycle()
     val devices  by vm.discoveredDevices.collectAsStateWithLifecycle()
     val wifiOff  by vm.wifiOffDialog.collectAsStateWithLifecycle()
     val language by vm.selectedLanguage.collectAsStateWithLifecycle()
+    
+    val sttState by vm.sttState.collectAsStateWithLifecycle()
+    val ttsState by vm.ttsState.collectAsStateWithLifecycle()
+    val isModelDownloaded by vm.isModelDownloaded.collectAsStateWithLifecycle()
 
     var langMenuExpanded by remember { mutableStateOf(false) }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                vm.discover()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     LaunchedEffect(state) {
         if (state is ConnectionState.Connected) onNavigateToSession()
@@ -56,9 +79,8 @@ fun HomeScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title   = { Text("iTantra — Connect") },
+                title   = { Text("iTantra") },
                 actions = {
-                    // Language selector — enabled before connecting
                     Box {
                         TextButton(onClick = { langMenuExpanded = true }) {
                             Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -97,6 +119,16 @@ fun HomeScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            
+            // AI Model Status Card
+            ModelStatusCard(
+                language = language,
+                isDownloaded = isModelDownloaded,
+                sttState = sttState,
+                ttsState = ttsState,
+                onDownload = { vm.downloadModels() }
+            )
+
             ConnectionBanner(state)
 
             Text("Nearby Devices", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -109,9 +141,84 @@ fun HomeScreen(
                         PeerCard(
                             device      = device,
                             isConnected = state is ConnectionState.Connected,
+                            isReady     = isModelDownloaded,
                             onConnect   = { vm.connectTo(device.address) },
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModelStatusCard(
+    language: SupportedLanguage,
+    isDownloaded: Boolean,
+    sttState: ModelState,
+    ttsState: ModelState,
+    onDownload: () -> Unit
+) {
+    val isDownloading = sttState is ModelState.Downloading || ttsState is ModelState.Downloading
+    
+    val sttProgress = (sttState as? ModelState.Downloading)?.progress ?: 0
+    val ttsProgress = (ttsState as? ModelState.Downloading)?.progress ?: 0
+    val totalProgress = if (isDownloading) (sttProgress + ttsProgress) / 2f / 100f else 0f
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isDownloaded) MaterialTheme.colorScheme.secondaryContainer 
+                             else MaterialTheme.colorScheme.errorContainer
+        )
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "AI Voice Models: ${language.displayName}",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (isDownloaded) "Ready for offline Walkie-Talkie." 
+                               else "Models required for offline inference.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+                    )
+                }
+                
+                if (isDownloaded) {
+                    Icon(
+                        Icons.Default.Check, 
+                        contentDescription = "Downloaded", 
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(28.dp)
+                    )
+                } else if (!isDownloading) {
+                    Button(onClick = onDownload, modifier = Modifier.padding(start = 8.dp)) {
+                        Icon(Icons.Default.CloudDownload, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text("Download")
+                    }
+                }
+            }
+            
+            AnimatedVisibility(visible = isDownloading) {
+                Column(modifier = Modifier.padding(top = 16.dp)) {
+                    LinearProgressIndicator(
+                        progress = { totalProgress },
+                        modifier = Modifier.fillMaxWidth().height(8.dp),
+                    )
+                    Text(
+                        text = "Downloading models... please keep the app open.",
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.padding(top = 8.dp)
+                    )
                 }
             }
         }
@@ -158,7 +265,7 @@ private fun EmptyPeerList() {
 }
 
 @Composable
-private fun PeerCard(device: DiscoveredDevice, isConnected: Boolean, onConnect: () -> Unit) {
+private fun PeerCard(device: DiscoveredDevice, isConnected: Boolean, isReady: Boolean, onConnect: () -> Unit) {
     OutlinedCard(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(12.dp),
@@ -170,7 +277,7 @@ private fun PeerCard(device: DiscoveredDevice, isConnected: Boolean, onConnect: 
                 Text(device.address, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.outline)
             }
             Spacer(Modifier.width(8.dp))
-            Button(onClick = onConnect, enabled = !isConnected) {
+            Button(onClick = onConnect, enabled = !isConnected && isReady) {
                 Text(if (isConnected) "Connected" else "Connect")
             }
         }

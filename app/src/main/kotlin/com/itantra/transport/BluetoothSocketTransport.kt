@@ -1,4 +1,4 @@
-﻿package com.itantra.transport
+package com.itantra.transport
 
 import android.content.Context
 import kotlinx.coroutines.flow.Flow
@@ -13,10 +13,12 @@ class BluetoothSocketTransport(
 ) : TransportChannel {
 
     private val _payloads = MutableSharedFlow<Payload>()
+    private val _pcm      = MutableSharedFlow<FloatArray>()
     private val _state    = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     private val _devices  = MutableStateFlow<List<DiscoveredDevice>>(emptyList())
 
     override val onPayloadReceived: Flow<Payload>               = _payloads.asSharedFlow()
+    override val onPcmReceived: Flow<FloatArray>               = _pcm.asSharedFlow()
     override val connectionState:   StateFlow<ConnectionState>  = _state.asStateFlow()
     override val discoveredDevices: StateFlow<List<DiscoveredDevice>> = _devices.asStateFlow()
 
@@ -30,11 +32,14 @@ class BluetoothSocketTransport(
 
     override suspend fun send(payload: Payload): Unit =
         throw UnsupportedOperationException("BluetoothSocketTransport is not yet implemented.")
+        
+    override suspend fun sendPcm(pcm: FloatArray): Unit =
+        throw UnsupportedOperationException("BluetoothSocketTransport is not yet implemented.")
 
     override suspend fun disconnect() {
         _state.value = ConnectionState.Idle
         _devices.value = emptyList()
     }
 
-    override fun shutdown() { /* no-op — nothing to release */ }
+    override fun shutdown() { /* no-op - nothing to release */ }
 }

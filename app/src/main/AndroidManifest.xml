@@ -1,5 +1,6 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    android:installLocation="auto"
     xmlns:tools="http://schemas.android.com/tools">
 
     <!-- ======================================================================
@@ -18,19 +19,17 @@
     -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Android 13+ (API 33+): replaces ACCESS_FINE_LOCATION for Wi-Fi Direct -->
+    <!-- Android 13+ (API 33+): Wi-Fi Direct peer discovery -->
+    <!-- NOTE: Do NOT add neverForLocation here — it silently breaks WifiP2pManager.discoverPeers() on most OEM devices -->
     <uses-permission
         android:name="android.permission.NEARBY_WIFI_DEVICES"
-        android:usesPermissionFlags="neverForLocation"
         tools:targetApi="tiramisu" />
 
-    <!-- Android 8–12 (API 26–32): required for Wi-Fi Direct discovery on older Android -->
-    <uses-permission
-        android:name="android.permission.ACCESS_FINE_LOCATION"
-        android:maxSdkVersion="32" />
-    <uses-permission
-        android:name="android.permission.ACCESS_COARSE_LOCATION"
-        android:maxSdkVersion="32" />
+    <!-- ACCESS_FINE_LOCATION is also needed on API 33+ for Wi-Fi Direct group formation on some OEMs -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+
 
     <uses-feature
         android:name="android.hardware.wifi.direct"
@@ -71,6 +70,7 @@
         android:required="false" />
 
     <application
+        android:extractNativeLibs="false"
         android:name="com.itantra.iTantraApplication"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"

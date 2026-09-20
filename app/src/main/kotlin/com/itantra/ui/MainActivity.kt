@@ -1,4 +1,4 @@
-﻿package com.itantra.ui
+package com.itantra.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity() {
                     MainNavGraph(
                         transport         = app.transport,
                         sessionController = app.sessionController,
+                        modelManager      = app.modelManager,
                         permissionsGranted = permissionsGranted
                     )
                 }
@@ -67,11 +68,13 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.CHANGE_WIFI_STATE,
             Manifest.permission.CHANGE_NETWORK_STATE,
             Manifest.permission.MODIFY_AUDIO_SETTINGS,
+            // ACCESS_FINE_LOCATION is required for Wi-Fi Direct peer discovery on ALL Android versions.
+            // On Android 13+, NEARBY_WIFI_DEVICES is also required alongside it.
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             perms += Manifest.permission.NEARBY_WIFI_DEVICES
-        } else {
-            perms += Manifest.permission.ACCESS_FINE_LOCATION
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             perms += Manifest.permission.BLUETOOTH_SCAN
@@ -82,11 +85,15 @@ class MainActivity : ComponentActivity() {
             @Suppress("DEPRECATION")
             perms += Manifest.permission.BLUETOOTH_ADMIN
         }
-        
-        val denied = perms.filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
+
+        val denied = perms.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
         if (denied.isEmpty()) {
             permissionsGranted.value = true
+            android.util.Log.d("MainActivity", "All permissions already granted")
         } else {
+            android.util.Log.d("MainActivity", "Requesting permissions: $denied")
             permissionLauncher.launch(perms.toTypedArray())
         }
     }

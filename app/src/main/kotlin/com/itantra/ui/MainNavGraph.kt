@@ -1,9 +1,10 @@
-﻿package com.itantra.ui
+package com.itantra.ui
 
 import androidx.compose.runtime.Composable
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.itantra.model.ModelManager
 import com.itantra.session.SessionController
 import com.itantra.transport.TransportChannel
 import com.itantra.ui.home.HomeScreen
@@ -17,6 +18,7 @@ private const val ROUTE_SESSION = "session"
 fun MainNavGraph(
     transport: TransportChannel,
     sessionController: SessionController,
+    modelManager: ModelManager,
     permissionsGranted: StateFlow<Boolean>
 ) {
     val navController = rememberNavController()
@@ -26,6 +28,7 @@ fun MainNavGraph(
             HomeScreen(
                 transport           = transport,
                 sessionController   = sessionController,
+                modelManager        = modelManager,
                 onNavigateToSession = { navController.navigate(ROUTE_SESSION) },
                 permissionsGranted  = permissionsGranted
             )
