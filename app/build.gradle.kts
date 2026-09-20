@@ -1,4 +1,4 @@
-﻿plugins {
+plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.compose.compiler)
@@ -16,6 +16,9 @@ android {
         versionCode   = 1
         versionName   = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            abiFilters.add("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -43,9 +46,15 @@ android {
     buildFeatures {
         compose = true
     }
+
+    packagingOptions {
+        jniLibs.pickFirsts.add("**/libonnxruntime.so")
+        jniLibs.pickFirsts.add("**/libsherpa-onnx-core.so")
+    }
 }
 
 dependencies {
+    implementation(files("libs/sherpa-onnx-1.13.7.aar"))
     implementation(libs.onnxruntime.android)
     // ── Jetpack Compose BOM ──────────────────────────────────────────────────
     implementation(platform(libs.compose.bom))

@@ -82,8 +82,8 @@ class SileroVadEngine(
 
             reset()
             isInitialized = true
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize Silero VAD via ONNX Runtime. Will use fallback VAD.", e)
+        } catch (t: Throwable) {
+            Log.e(TAG, "Failed to initialize Silero VAD via ONNX Runtime. Will use fallback VAD.", t)
             isInitialized = false
         }
     }
@@ -169,8 +169,8 @@ class SileroVadEngine(
                     isSpeech = prob >= threshold
                 )
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "ONNX inference error in SileroVadEngine", e)
+        } catch (t: Throwable) {
+            Log.e(TAG, "ONNX inference error in SileroVadEngine", t)
             return@withContext fallbackVad(pcmFrame)
         }
     }

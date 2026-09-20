@@ -1,4 +1,4 @@
-﻿package com.itantra.stt
+package com.itantra.stt
 
 import kotlinx.coroutines.flow.Flow
 
@@ -23,6 +23,11 @@ interface SpeechToTextEngine {
      * Collect this *before* calling [start].
      */
     val recognizedSentences: Flow<RecognizedSentence>
+
+    /**
+     * Set the current target language for recognition.
+     */
+    fun setLanguage(languageCode: String)
 
     /** Begin microphone capture and recognition. Idempotent. */
     fun start()

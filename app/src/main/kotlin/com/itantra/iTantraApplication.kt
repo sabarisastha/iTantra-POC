@@ -1,4 +1,4 @@
-﻿package com.itantra
+package com.itantra
 
 import android.app.Application
 import com.itantra.mock.MockSttEngine
@@ -37,20 +37,22 @@ class iTantraApplication : Application() {
         WifiDirectSocketTransport(this)
     }
 
-    /**
-     * MOCK STT engine — SWAP FOR REAL TFLITE/PYTORCH MODEL.
-     * See README.md → "Swapping to Real Models".
-     */
-    val sttEngine: MockSttEngine by lazy {         // ← LINE A: change type + constructor
-        MockSttEngine(this)
+    val modelManager: com.itantra.model.ModelManager by lazy {
+        com.itantra.model.ModelManager(this).apply { init() }
     }
 
     /**
-     * MOCK TTS engine — *** TEMPORARY DEV STAND-IN — MUST BE REPLACED ***.
-     * See README.md → "Swapping to Real Models".
+     * Real STT Engine.
      */
-    val ttsEngine: MockTtsEngine by lazy {         // ← LINE B: change type + constructor
-        MockTtsEngine(this)
+    val sttEngine: com.itantra.stt.SpeechToTextEngine by lazy {
+        com.itantra.stt.IndicConformerSttEngine(this, modelManager)
+    }
+
+    /**
+     * Real TTS Engine.
+     */
+    val ttsEngine: com.itantra.tts.TextToSpeechEngine by lazy {
+        com.itantra.tts.IndicParlerTtsEngine(this, modelManager)
     }
 
     /**

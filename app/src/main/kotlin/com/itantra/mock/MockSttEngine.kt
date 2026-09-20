@@ -61,9 +61,12 @@ class MockSttEngine(
         hangoverFrames = 16,    // ~512ms silence to end
     )
 
-    fun setLanguage(code: String) {
-        languageCode = code
-        Log.d(TAG, "MockSttEngine language updated to: $code")
+    /**
+     * (Mock) Updates the language used for subsequent random sentences.
+     */
+    override fun setLanguage(languageCode: String) {
+        this.languageCode = languageCode
+        Log.d(TAG, "MockSttEngine language updated to: $languageCode")
     }
 
     fun resetSequence() {

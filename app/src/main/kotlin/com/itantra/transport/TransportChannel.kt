@@ -1,4 +1,4 @@
-﻿package com.itantra.transport
+package com.itantra.transport
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,6 +14,9 @@ interface TransportChannel {
 
     /** Emits every [Payload] received from the remote peer. Hot, never completes. */
     val onPayloadReceived: Flow<Payload>
+
+    /** Emits every raw PCM audio chunk received from the remote peer. */
+    val onPcmReceived: Flow<FloatArray>
 
     /** Live connection state — observed by the UI layer. */
     val connectionState: StateFlow<ConnectionState>
@@ -35,6 +38,9 @@ interface TransportChannel {
      * @throws IllegalStateException if called when not [ConnectionState.Connected].
      */
     suspend fun send(payload: Payload)
+    
+    /** Send raw PCM over the transport */
+    suspend fun sendPcm(pcm: FloatArray)
 
     /**
      * Explicitly disconnects any active socket connection, clears active P2P groups,
