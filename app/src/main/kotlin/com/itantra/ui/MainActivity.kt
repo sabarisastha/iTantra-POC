@@ -29,7 +29,10 @@ class MainActivity : ComponentActivity() {
         val denied = results.filterValues { !it }.keys
         if (denied.isNotEmpty()) {
             android.util.Log.w("MainActivity", "Permissions denied: $denied")
-        } else {
+        }
+        val recordAudioGranted = results[Manifest.permission.RECORD_AUDIO] == true
+        val locationGranted = results[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        if (recordAudioGranted && locationGranted) {
             permissionsGranted.value = true
         }
     }
@@ -57,8 +60,10 @@ class MainActivity : ComponentActivity() {
     
     override fun onDestroy() {
         super.onDestroy()
-        app.transport.shutdown()
-        app.sessionController.shutdown()
+        if (isFinishing) {
+            app.transport.shutdown()
+            app.sessionController.shutdown()
+        }
     }
 
     private fun requestRequiredPermissions() {

@@ -17,17 +17,20 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.net.BindException
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 private const val TAG = "ITANTRA-WIFI"
 private const val TCP_PORT = 8988
@@ -44,10 +47,10 @@ class WifiDirectSocketTransport(
     // Single long-lived scope with SupervisorJob — never cancelled permanently.
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
-    private val wifiP2pManager: WifiP2pManager =
-        context.getSystemService(Context.WIFI_P2P_SERVICE) as WifiP2pManager
+    private val wifiP2pManager: WifiP2pManager? =
+        context.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
     private val p2pChannel: WifiP2pManager.Channel? =
-        wifiP2pManager.initialize(context, Looper.getMainLooper(), null)
+        wifiP2pManager?.initialize(context, Looper.getMainLooper(), null)
     private var broadcastReceiver: BroadcastReceiver? = null
 
     // ── Exposed state ─────────────────────────────────────────────────────────
@@ -60,12 +63,16 @@ class WifiDirectSocketTransport(
     private val _onPayloadReceived = MutableSharedFlow<Payload>(extraBufferCapacity = 64)
     override val onPayloadReceived: Flow<Payload> = _onPayloadReceived.asSharedFlow()
 
-    private val _onPcmReceived = MutableSharedFlow<FloatArray>(extraBufferCapacity = 64)
+    private val _onPcmReceived = MutableSharedFlow<FloatArray>(
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
     override val onPcmReceived: Flow<FloatArray> = _onPcmReceived.asSharedFlow()
 
     // ── Active resources ──────────────────────────────────────────────────────
     @Volatile private var framedSocket: FramedSocket? = null
     @Volatile private var serverSocket: ServerSocket? = null
+    private var discoveryJob: Job? = null
     private var connectionJob: Job? = null      // the job owning the current connection attempt/session
     private var receiveJob: Job? = null         // the read-loop job
 
@@ -93,15 +100,29 @@ class WifiDirectSocketTransport(
             return
         }
         val ch = p2pChannel ?: return
+        if (_connectionState.value is ConnectionState.Connected || _connectionState.value is ConnectionState.Connecting) {
+            Log.d(TAG, "startAdvertisingAndDiscovery: skipping because already connected/connecting")
+            return
+        }
         Log.d(TAG, "Starting peer discovery")
         _connectionState.value = ConnectionState.Discovering
-        wifiP2pManager.discoverPeers(ch, object : WifiP2pManager.ActionListener {
-            override fun onSuccess() { Log.d(TAG, "discoverPeers: started") }
-            override fun onFailure(reason: Int) {
-                Log.w(TAG, "discoverPeers: failed reason=$reason")
-                _connectionState.value = ConnectionState.Idle
+        
+        discoveryJob?.cancel()
+        discoveryJob = scope.launch {
+            try {
+                wifiP2pManager?.discoverPeers(ch, object : WifiP2pManager.ActionListener {
+                    override fun onSuccess() { Log.d(TAG, "discoverPeers: started") }
+                    override fun onFailure(reason: Int) {
+                        Log.w(TAG, "discoverPeers: failed reason=$reason")
+                        if (_connectionState.value !is ConnectionState.Connected && _connectionState.value !is ConnectionState.Connecting) {
+                            _connectionState.value = ConnectionState.Idle
+                        }
+                    }
+                })
+            } catch (e: SecurityException) {
+                Log.e(TAG, "discoverPeers failed: ${e.message}")
             }
-        })
+        }
     }
 
     // ── Connect ───────────────────────────────────────────────────────────────
@@ -119,33 +140,54 @@ class WifiDirectSocketTransport(
             Log.d(TAG, "[ITANTRA-WIFI] state=CONNECTING to $deviceAddress")
             _connectionState.value = ConnectionState.Connecting
 
-            val config = WifiP2pConfig().apply {
-                this.deviceAddress = deviceAddress
-                wps.setup = WpsInfo.PBC
-            }
+            var requestAccepted = false
+            for (attempt in 1..3) {
+                val config = WifiP2pConfig().apply {
+                    this.deviceAddress = deviceAddress
+                    wps.setup = WpsInfo.PBC
+                }
 
-            // Send the P2P connect request — the actual socket setup happens in handleConnectionInfo()
-            val requestAccepted = withTimeoutOrNull(CONNECT_TIMEOUT_MS) {
-                suspendCoroutine { cont ->
-                    wifiP2pManager.connect(p2pChannel, config, object : WifiP2pManager.ActionListener {
-                        override fun onSuccess() {
-                            Log.d(TAG, "wifiP2pManager.connect() request accepted by framework")
-                            cont.resume(true)
+                Log.d(TAG, "Initiating wifiP2pManager.connect() attempt $attempt/3 to $deviceAddress")
+                val result = withTimeoutOrNull(CONNECT_TIMEOUT_MS) {
+                    suspendCancellableCoroutine { cont ->
+                        try {
+                            wifiP2pManager?.connect(p2pChannel, config, object : WifiP2pManager.ActionListener {
+                                override fun onSuccess() {
+                                    Log.d(TAG, "wifiP2pManager.connect() request accepted by framework (attempt $attempt)")
+                                    if (cont.isActive) cont.resume(0) // 0 = SUCCESS
+                                }
+                                override fun onFailure(reason: Int) {
+                                    Log.e(TAG, "wifiP2pManager.connect() failed reason=$reason (attempt $attempt)")
+                                    if (cont.isActive) cont.resume(reason)
+                                }
+                            })
+                        } catch (e: SecurityException) {
+                            Log.e(TAG, "connect failed with SecurityException: ${e.message}")
+                            if (cont.isActive) cont.resume(-1)
                         }
-                        override fun onFailure(reason: Int) {
-                            Log.e(TAG, "wifiP2pManager.connect() rejected by framework reason=$reason")
-                            cont.resume(false)
+                    }
+                }
+
+                if (result == 0) {
+                    requestAccepted = true
+                    break
+                } else {
+                    Log.w(TAG, "Connect attempt $attempt failed with reason $result — retrying after cleanup...")
+                    p2pChannel?.let { ch ->
+                        runCatching {
+                            try {
+                                wifiP2pManager?.cancelConnect(ch, null)
+                            } catch (e: SecurityException) {
+                                Log.e(TAG, "cancelConnect failed: ${e.message}")
+                            }
                         }
-                    })
+                    }
+                    delay(1200)
                 }
             }
 
-            if (requestAccepted == false) {
-                Log.e(TAG, "Connection request rejected — resetting to IDLE")
-                performCleanup()
-            } else if (requestAccepted == null) {
-                // timeout — framework never responded
-                Log.e(TAG, "Connection request timed out after ${CONNECT_TIMEOUT_MS}ms — resetting to IDLE")
+            if (!requestAccepted) {
+                Log.e(TAG, "Connection request rejected after retries — resetting to IDLE")
                 performCleanup()
             }
             // If true: wait for WIFI_P2P_CONNECTION_CHANGED_ACTION broadcast → handleConnectionInfo()
@@ -181,13 +223,18 @@ class WifiDirectSocketTransport(
      * Deterministic cleanup: cancel all jobs, close all sockets, remove Wi-Fi P2P group,
      * reset to IDLE. Safe to call multiple times.
      */
-    private suspend fun performCleanup() = withContext(Dispatchers.IO) {
+    private suspend fun performCleanup() = withContext(NonCancellable + Dispatchers.IO) {
         Log.d(TAG, "performCleanup() start")
 
-        receiveJob?.cancel()
+        val rJob = receiveJob
         receiveJob = null
+        rJob?.cancel()
+        
         connectionJob?.cancel()
         connectionJob = null
+        
+        discoveryJob?.cancel()
+        discoveryJob = null
 
         runCatching { framedSocket?.close() }
         framedSocket = null
@@ -197,31 +244,39 @@ class WifiDirectSocketTransport(
 
         val ch = p2pChannel
         if (ch != null && hasWifiP2pPermission()) {
-            // cancelConnect first, then removeGroup with 3s timeouts to prevent hanging
             withTimeoutOrNull(3000L) {
-                suspendCoroutine<Unit> { cont ->
-                    wifiP2pManager.cancelConnect(ch, object : WifiP2pManager.ActionListener {
-                        override fun onSuccess() { cont.resume(Unit) }
-                        override fun onFailure(r: Int) { cont.resume(Unit) }
-                    })
+                suspendCancellableCoroutine<Unit> { cont ->
+                    try {
+                        wifiP2pManager?.cancelConnect(ch, object : WifiP2pManager.ActionListener {
+                            override fun onSuccess() { if (cont.isActive) cont.resume(Unit) }
+                            override fun onFailure(r: Int) { if (cont.isActive) cont.resume(Unit) }
+                        })
+                    } catch (e: SecurityException) {
+                        if (cont.isActive) cont.resume(Unit)
+                    }
                 }
             }
             withTimeoutOrNull(3000L) {
-                suspendCoroutine<Unit> { cont ->
-                    wifiP2pManager.removeGroup(ch, object : WifiP2pManager.ActionListener {
-                        override fun onSuccess() { cont.resume(Unit) }
-                        override fun onFailure(r: Int) { cont.resume(Unit) }
-                    })
+                suspendCancellableCoroutine<Unit> { cont ->
+                    try {
+                        wifiP2pManager?.removeGroup(ch, object : WifiP2pManager.ActionListener {
+                            override fun onSuccess() { if (cont.isActive) cont.resume(Unit) }
+                            override fun onFailure(r: Int) { if (cont.isActive) cont.resume(Unit) }
+                        })
+                    } catch (e: SecurityException) {
+                        if (cont.isActive) cont.resume(Unit)
+                    }
                 }
             }
         }
 
+        _discoveredDevices.value = emptyList()
         _connectionState.value = ConnectionState.Idle
         Log.d(TAG, "[ITANTRA-WIFI] state=IDLE (cleanup complete)")
     }
 
     override fun shutdown() {
-        scope.launch { performCleanup() }
+        runBlocking { performCleanup() }
         unregisterReceiver()
         scope.cancel()
     }
@@ -231,8 +286,9 @@ class WifiDirectSocketTransport(
     private fun registerReceiver() {
         if (broadcastReceiver != null) return
         val ch = p2pChannel ?: return
+        val mgr = wifiP2pManager ?: return
         val receiver = WifiP2pBroadcastReceiver(
-            manager       = wifiP2pManager,
+            manager       = mgr,
             channel       = ch,
             hasPermission = ::hasWifiP2pPermission,
             onPeers = { devices ->
@@ -290,8 +346,8 @@ class WifiDirectSocketTransport(
         }
 
         // Avoid setting up a duplicate socket if already connected
-        if (_connectionState.value is ConnectionState.Connected && framedSocket?.isClosed == false) {
-            Log.d(TAG, "handleConnectionInfo: already connected — ignoring duplicate broadcast")
+        if ((_connectionState.value is ConnectionState.Connected && framedSocket?.isClosed == false) || connectionJob?.isActive == true) {
+            Log.d(TAG, "handleConnectionInfo: already connected or connection in progress — ignoring duplicate broadcast")
             return
         }
 
@@ -315,20 +371,36 @@ class WifiDirectSocketTransport(
     // ── TCP Server ────────────────────────────────────────────────────────────
 
     private suspend fun runServer() = withContext(Dispatchers.IO) {
-        try {
-            // Always close any stale server socket before creating a new one
-            runCatching { serverSocket?.close() }
-            val ss = ServerSocket(TCP_PORT)
-            serverSocket = ss
-            Log.d(TAG, "[ITANTRA-SOCKET] server started on port $TCP_PORT")
-            val client = ss.accept()
-            runCatching { ss.close() }
-            serverSocket = null
-            setupSocket(client, "Client", isGroupOwner = true)
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            Log.e(TAG, "Server error: ${e.message}", e)
-            _connectionState.value = ConnectionState.Error("Server error: ${e.message}")
+        var retryCount = 0
+        while (retryCount < 3) {
+            try {
+                // Always close any stale server socket before creating a new one
+                runCatching { serverSocket?.close() }
+                val ss = ServerSocket(TCP_PORT).apply {
+                    reuseAddress = true
+                    soTimeout = 25_000
+                }
+                serverSocket = ss
+                Log.d(TAG, "[ITANTRA-SOCKET] server started on port $TCP_PORT")
+                val client = ss.accept()
+                runCatching { ss.close() }
+                serverSocket = null
+                setupSocket(client, "Client", isGroupOwner = true)
+                return@withContext
+            } catch (e: BindException) {
+                retryCount++
+                Log.w(TAG, "Server bind failed (attempt $retryCount): ${e.message}")
+                if (retryCount >= 3) {
+                    _connectionState.value = ConnectionState.Error("Server bind error: ${e.message}")
+                    return@withContext
+                }
+                delay(1000)
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Log.e(TAG, "Server error: ${e.message}", e)
+                _connectionState.value = ConnectionState.Error("Server error: ${e.message}")
+                return@withContext
+            }
         }
     }
 
@@ -339,7 +411,8 @@ class WifiDirectSocketTransport(
         for (attempt in 1..CLIENT_MAX_RETRIES) {
             try {
                 Log.d(TAG, "[ITANTRA-SOCKET] client attempt $attempt/$CLIENT_MAX_RETRIES → $ownerAddress:$TCP_PORT")
-                val s = Socket(ownerAddress, TCP_PORT)
+                val s = Socket()
+                s.connect(InetSocketAddress(ownerAddress, TCP_PORT), 5000)
                 setupSocket(s, "GroupOwner", isGroupOwner = false)
                 return@withContext // success
             } catch (e: CancellationException) {
@@ -391,9 +464,13 @@ class WifiDirectSocketTransport(
                     }.onFailure { Log.e(TAG, "JSON parse error: ${it.message}") }
                 }
                 FrameType.RAW_PCM -> {
+                    if (frame.second.size % 4 != 0) {
+                        Log.w(TAG, "Dropping malformed PCM frame size=${frame.second.size}")
+                        continue
+                    }
                     val buf = ByteBuffer.wrap(frame.second).order(ByteOrder.LITTLE_ENDIAN)
                     val floats = FloatArray(frame.second.size / 4) { buf.float }
-                    _onPcmReceived.emit(floats)
+                    _onPcmReceived.tryEmit(floats)
                 }
             }
         }

@@ -1,9 +1,9 @@
 package com.itantra
 
 import android.app.Application
-import com.itantra.mock.MockSttEngine
-import com.itantra.mock.MockTtsEngine
 import com.itantra.session.SessionController
+import com.itantra.transport.BluetoothSocketTransport
+import com.itantra.transport.TransportManager
 import com.itantra.transport.WifiDirectSocketTransport
 
 /**
@@ -33,8 +33,17 @@ class iTantraApplication : Application() {
      * Injected into [SessionController] as a [com.itantra.transport.TransportChannel] —
      * SessionController never references WifiDirectSocketTransport directly.
      */
-    val transport: WifiDirectSocketTransport by lazy {
+    private val wifiDirectTransport: WifiDirectSocketTransport by lazy {
         WifiDirectSocketTransport(this)
+    }
+
+    private val bluetoothTransport: BluetoothSocketTransport by lazy {
+        BluetoothSocketTransport(this)
+    }
+
+    /** One stable reference for UI and SessionController; Bluetooth is selected by default. */
+    val transport: TransportManager by lazy {
+        TransportManager(bluetoothTransport, wifiDirectTransport)
     }
 
     val modelManager: com.itantra.model.ModelManager by lazy {

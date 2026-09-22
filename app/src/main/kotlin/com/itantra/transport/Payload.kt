@@ -1,6 +1,7 @@
 package com.itantra.transport
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 
 /**
  * Wire format for all data exchanged between devices over the TCP socket.
@@ -18,6 +19,7 @@ data class Payload(
     /** Unique sender identifier used for deterministic floor collision tie-breaking. */
     val senderId: String = "",
     /** Set locally by receiver when dequeued; NOT included in transmitted JSON. */
+    @Transient
     val receivedTimestampMs: Long = 0L,
 )
 
@@ -45,4 +47,8 @@ enum class PayloadType {
 
     /** Reserved for future handshake / keepalive messages. */
     CONTROL,
+
+    SESSION_INIT,
+    SESSION_ACK,
+    HEARTBEAT
 }

@@ -10,7 +10,8 @@ import com.itantra.session.SessionController
 import com.itantra.session.SupportedLanguage
 import com.itantra.transport.ConnectionState
 import com.itantra.transport.DiscoveredDevice
-import com.itantra.transport.TransportChannel
+import com.itantra.transport.TransportManager
+import com.itantra.transport.TransportKind
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,7 +24,7 @@ import kotlinx.coroutines.launch
 private const val TAG = "HomeViewModel"
 
 class HomeViewModel(
-    private val transport: TransportChannel,
+    private val transport: TransportManager,
     private val sessionController: SessionController,
     private val modelManager: ModelManager,
     permissionsGranted: StateFlow<Boolean>
@@ -32,13 +33,14 @@ class HomeViewModel(
     val connectionState: StateFlow<ConnectionState> = transport.connectionState
         .onEach { state ->
             if (state is ConnectionState.Error &&
-                state.message.contains("Wi-Fi Direct is turned off", ignoreCase = true)) {
+                state.message.contains("turned off", ignoreCase = true)) {
                 _wifiOffDialog.value = true
             }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ConnectionState.Idle)
 
     val discoveredDevices: StateFlow<List<DiscoveredDevice>> = transport.discoveredDevices
+    val activeTransport: StateFlow<TransportKind> = transport.activeKind
     val selectedLanguage: StateFlow<SupportedLanguage> = sessionController.selectedLanguage
 
     // Track STT/TTS download states from ModelManager
@@ -57,9 +59,22 @@ class HomeViewModel(
             permissionsGranted.collect { granted ->
                 if (granted) {
                     Log.d(TAG, "Permissions granted — starting discovery")
-                    // Small delay to let the Wi-Fi P2P channel initialize
                     delay(500)
                     discover()
+                }
+            }
+        }
+
+        // Periodic auto-discovery loop to keep peer list fresh automatically
+        viewModelScope.launch {
+            while (true) {
+                delay(15_000)
+                if (permissionsGranted.value) {
+                    val state = connectionState.value
+                    if (state is ConnectionState.Idle) {
+                        Log.d(TAG, "Auto-refreshing peer discovery...")
+                        discover()
+                    }
                 }
             }
         }
@@ -75,8 +90,12 @@ class HomeViewModel(
     fun downloadModels() {
         val lang = selectedLanguage.value.code
         viewModelScope.launch {
-            modelManager.preDownloadModels(lang)
-            _isModelDownloaded.value = modelManager.isModelDownloaded(lang)
+            try {
+                modelManager.preDownloadModels(lang)
+                _isModelDownloaded.value = modelManager.isModelDownloaded(lang)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error downloading models", e)
+            }
         }
     }
 
@@ -95,6 +114,11 @@ class HomeViewModel(
         }
     }
 
+    fun selectTransport(kind: TransportKind) {
+        if (sessionController.isSessionActive()) return
+        viewModelScope.launch { transport.select(kind) }
+    }
+
     fun setLanguage(lang: SupportedLanguage) {
         sessionController.setLanguage(lang)
     }
@@ -103,7 +127,7 @@ class HomeViewModel(
 
     companion object {
         fun factory(
-            transport: TransportChannel,
+            transport: TransportManager,
             sessionController: SessionController,
             modelManager: ModelManager,
             permissionsGranted: StateFlow<Boolean>

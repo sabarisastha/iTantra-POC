@@ -1,4 +1,4 @@
-﻿# kotlinx.serialization — keep generated serializers
+# kotlinx.serialization — keep generated serializers
 -keepattributes *Annotation*, InnerClasses
 -dontnote kotlinx.serialization.AnnotationsKt
 
@@ -9,6 +9,10 @@
     kotlinx.serialization.KSerializer serializer(...);
 }
 
+-keep class com.k2fsa.sherpa.onnx.** { *; }
+-keep class ai.onnxruntime.** { *; }
+-keep class com.itantra.transport.Payload { *; }
+-keep class com.itantra.transport.PayloadType { *; }
 # Keep @Serializable data classes (Payload, etc.)
 -keep,includedescriptorclasses class com.itantra.**$$serializer { *; }
 -keepclassmembers class com.itantra.** {

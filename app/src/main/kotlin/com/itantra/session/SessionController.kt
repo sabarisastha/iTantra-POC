@@ -13,11 +13,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -58,10 +60,12 @@ class SessionController(
     @Volatile private var localFloorRequestTimestamp: Long = 0L
     @Volatile private var localModeChangeTimestamp: Long = 0L
     private var floorTimeoutJob: Job? = null
+    private var heartbeatJob: Job? = null
     
     // Continuous audio for PHONE mode
     private var phoneAudioRecorder: com.itantra.audio.AudioRecorder? = null
     private var phoneAudioPlayer: com.itantra.audio.AudioPlayer? = null
+    private var pcmSendChannel: Channel<FloatArray>? = null
 
     init {
         Log.d(TAG, "SessionController initialized localPeerId=$localPeerId")
@@ -72,19 +76,52 @@ class SessionController(
 
     // ── Connection monitoring ─────────────────────────────────────────────────
 
+    private fun startHeartbeat() {
+        heartbeatJob?.cancel()
+        heartbeatJob = scope.launch(Dispatchers.IO) {
+            var failedCount = 0
+            while (true) {
+                delay(10_000L)
+                val result = runCatching { 
+                    transport.send(Payload(
+                        type = PayloadType.CONTROL,
+                        text = "HEARTBEAT",
+                        senderId = localPeerId,
+                        sentTimestampMs = System.currentTimeMillis()
+                    ))
+                }
+                if (result.isFailure) {
+                    failedCount++
+                    if (failedCount >= 3) {
+                        Log.e(TAG, "[ITANTRA-SESSION] Heartbeat failed 3 times, disconnecting")
+                        disconnect()
+                        break
+                    }
+                } else {
+                    failedCount = 0
+                }
+            }
+        }
+    }
+
     private fun monitorConnectionState() {
         scope.launch {
             transport.connectionState.collect { state ->
                 when (state) {
                     is ConnectionState.Connected -> {
+                        // Preload before the first PTT release / first incoming speech, avoiding
+                        // a model-load pause on the active communication path.
+                        sttEngine.setLanguage(_selectedLanguage.value.code)
+                        ttsEngine.prewarm(_selectedLanguage.value.code)
+                        startHeartbeat()
                         Log.d(TAG, "[ITANTRA-SESSION] state=CONNECTED — sending SESSION_INIT")
                         sendControlPayload(
                             PayloadType.CONTROL,
                             text = "SESSION_INIT:${_selectedLanguage.value.code}:${_mode.value.name}"
                         )
                         if (_mode.value == SessionMode.PHONE) {
-                            Log.d(TAG, "[ITANTRA-SESSION] Connected in PHONE mode — auto-starting STT engine")
-                            sttEngine.start()
+                            Log.d(TAG, "[ITANTRA-SESSION] Connected in PHONE mode — auto-starting phone audio")
+                            if (phoneAudioRecorder == null) startPhoneModeAudio()
                         }
                     }
                     is ConnectionState.Idle, is ConnectionState.Error -> {
@@ -98,9 +135,11 @@ class SessionController(
     }
 
     private fun onSessionLost() {
+        heartbeatJob?.cancel()
         _sessionValidated.value = false
         floorTimeoutJob?.cancel()
         sttEngine.stop()
+        stopPhoneModeAudio()
         _floorState.value = FloorState.IDLE
         _mode.value = SessionMode.PTT
         Log.d(TAG, "[ITANTRA-SESSION] session reset complete")
@@ -156,18 +195,27 @@ class SessionController(
     private fun startPhoneModeAudio() {
         Log.d(TAG, "[ITANTRA-PHONE] Starting continuous audio for PHONE mode")
         phoneAudioPlayer = com.itantra.audio.AudioPlayer().apply { startStream() }
-        phoneAudioRecorder = com.itantra.audio.AudioRecorder()
-        phoneAudioRecorder?.startRecording { floatChunk ->
-            if (_mode.value == SessionMode.PHONE && isSessionActive()) {
-                scope.launch {
-                    runCatching { transport.sendPcm(floatChunk) }
+        
+        val channel = Channel<FloatArray>(capacity = 64)
+        pcmSendChannel = channel
+        scope.launch(Dispatchers.IO) {
+            for (chunk in channel) {
+                if (_mode.value == SessionMode.PHONE && isSessionActive()) {
+                    runCatching { transport.sendPcm(chunk) }
                 }
             }
+        }
+        
+        phoneAudioRecorder = com.itantra.audio.AudioRecorder()
+        phoneAudioRecorder?.startRecording { floatChunk ->
+            channel.trySend(floatChunk)
         }
     }
 
     private fun stopPhoneModeAudio() {
         Log.d(TAG, "[ITANTRA-PHONE] Stopping continuous audio for PHONE mode")
+        pcmSendChannel?.close()
+        pcmSendChannel = null
         phoneAudioRecorder?.stopRecording()
         phoneAudioRecorder = null
         phoneAudioPlayer?.stop()
@@ -213,10 +261,17 @@ class SessionController(
 
         scope.launch {
             sendControlPayload(PayloadType.REQUEST_FLOOR, timestamp = reqTime)
+            
+            delay(5000L)
             if (_floorState.value == FloorState.WAITING_FOR_CHANNEL) {
-                _floorState.value = FloorState.LOCAL_TRANSMITTING
-                Log.d(TAG, "[ITANTRA-PTT] floor granted locally — starting STT")
-                sttEngine.start()
+                Log.w(TAG, "[ITANTRA-PTT] Floor request timeout, retrying...")
+                sendControlPayload(PayloadType.REQUEST_FLOOR, timestamp = System.currentTimeMillis())
+                
+                delay(5000L)
+                if (_floorState.value == FloorState.WAITING_FOR_CHANNEL) {
+                    Log.w(TAG, "[ITANTRA-PTT] Floor request retry failed, resetting to IDLE")
+                    _floorState.value = FloorState.IDLE
+                }
             }
         }
     }
@@ -255,14 +310,14 @@ class SessionController(
         }
     }
 
+    fun replayReceivedAudio(sequenceId: Int): Boolean = ttsEngine.replay(sequenceId)
+
     fun disconnect() {
         Log.d(TAG, "disconnect() from SessionController")
         floorTimeoutJob?.cancel()
 
-        if (_floorState.value == FloorState.LOCAL_TRANSMITTING ||
-            _floorState.value == FloorState.WAITING_FOR_CHANNEL) {
-            scope.launch { sendControlPayload(PayloadType.RELEASE_FLOOR) }
-        }
+        val wasTransmitting = _floorState.value == FloorState.LOCAL_TRANSMITTING ||
+                              _floorState.value == FloorState.WAITING_FOR_CHANNEL
 
         sttEngine.stop()
         stopPhoneModeAudio()
@@ -272,7 +327,12 @@ class SessionController(
         _transcript.value = emptyList()
         _sessionValidated.value = false
 
-        scope.launch { transport.disconnect() }
+        scope.launch {
+            if (wasTransmitting) {
+                runCatching { sendControlPayload(PayloadType.RELEASE_FLOOR) }
+            }
+            transport.disconnect()
+        }
     }
 
     fun shutdown() {
@@ -351,7 +411,10 @@ class SessionController(
                 .catch { e -> Log.e(TAG, "Transport receive flow error", e) }
                 .collect { payload ->
                     when (payload.type) {
-                        PayloadType.CONTROL       -> handleControl(payload)
+                        PayloadType.CONTROL,
+                        PayloadType.SESSION_INIT,
+                        PayloadType.SESSION_ACK   -> handleControl(payload)
+                        PayloadType.HEARTBEAT     -> Log.d(TAG, "Incoming HEARTBEAT from ${payload.senderId}")
                         PayloadType.MODE_CHANGE   -> handleIncomingModeChange(payload)
                         PayloadType.REQUEST_FLOOR -> handleIncomingFloorRequest(payload)
                         PayloadType.FLOOR_GRANTED -> handleIncomingFloorGranted(payload)
@@ -362,7 +425,7 @@ class SessionController(
                 }
         }
         
-        scope.launch {
+        scope.launch(Dispatchers.IO) {
             transport.onPcmReceived
                 .catch { e -> Log.e(TAG, "Transport receive PCM flow error", e) }
                 .collect { floatChunk ->
@@ -385,29 +448,24 @@ class SessionController(
             val remoteMode = parts[2]
             val localLang  = _selectedLanguage.value.code
 
-            Log.d(TAG, "[ITANTRA-SESSION] SESSION_INIT received: remoteLang=$remoteLang remoteMode=$remoteMode localLang=$localLang")
-
             if (remoteLang != localLang) {
-                Log.e(TAG, "[ITANTRA-SESSION] LANGUAGE MISMATCH: local=$localLang remote=$remoteLang — disconnecting")
+                Log.w(TAG, "[ITANTRA-SESSION] Rejecting language mismatch: local=$localLang remote=$remoteLang")
                 _sessionValidated.value = false
                 scope.launch {
-                    sendControlPayload(
-                        PayloadType.CONTROL,
-                        text = "SESSION_REJECT:LANGUAGE_MISMATCH:local=$localLang:remote=$remoteLang"
-                    )
+                    sendControlPayload(PayloadType.CONTROL, "SESSION_REJECT:LANGUAGE_MISMATCH")
                     disconnect()
                 }
                 return
             }
 
             _sessionValidated.value = true
-            Log.d(TAG, "[ITANTRA-SESSION] Session VALIDATED — lang=$localLang mode=$remoteMode")
+            Log.d(TAG, "[ITANTRA-SESSION] Session VALIDATED — localLang=$localLang remoteLang=$remoteLang mode=$remoteMode")
 
             val parsedMode = runCatching { SessionMode.valueOf(remoteMode) }.getOrNull()
             if (parsedMode != null && parsedMode != _mode.value) {
                 applyModeTransition(parsedMode)
             } else if (_mode.value == SessionMode.PHONE) {
-                sttEngine.start()
+                if (phoneAudioRecorder == null) startPhoneModeAudio()
             }
 
         } else if (text.startsWith("SESSION_REJECT:")) {
@@ -483,7 +541,7 @@ class SessionController(
 
     private fun handleIncomingFloorGranted(payload: Payload) {
         if (_mode.value == SessionMode.PHONE) return
-        Log.d(TAG, "[ITANTRA-PTT] FLOOR_GRANTED from ${payload.senderId}")
+        Log.d(TAG, "[ITANTRA-PTT] FLOOR_GRANTED from ${payload.senderId} roundTripMs=${System.currentTimeMillis() - localFloorRequestTimestamp}")
         if (_floorState.value == FloorState.WAITING_FOR_CHANNEL) {
             _floorState.value = FloorState.LOCAL_TRANSMITTING
             sttEngine.start()
@@ -564,6 +622,6 @@ class SessionController(
     }
 
     private fun appendTranscript(entry: TranscriptEntry) {
-        _transcript.value = (_transcript.value + entry).takeLast(MAX_TRANSCRIPT_ENTRIES)
+        _transcript.update { (it + entry).takeLast(MAX_TRANSCRIPT_ENTRIES) }
     }
 }

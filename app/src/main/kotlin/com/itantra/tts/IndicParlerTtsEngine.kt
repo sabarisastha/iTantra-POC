@@ -23,6 +23,14 @@ class IndicParlerTtsEngine(
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var currentJob: Job? = null
     private val jobLock = Mutex()
+    private data class CachedAudio(val samples: FloatArray, val sampleRate: Int, val isAlert: Boolean)
+    private val replayLock = Any()
+    private val replayCache = object : LinkedHashMap<Int, CachedAudio>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, CachedAudio>): Boolean = size > 20
+    }
+    private val fallbackReplayCache = object : LinkedHashMap<Int, RecognizedSentence>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Int, RecognizedSentence>): Boolean = size > 20
+    }
 
     @Volatile private var isShutdown = false
 
@@ -53,7 +61,6 @@ class IndicParlerTtsEngine(
         var tts = modelManager.getTtsEngine()
         if (tts == null || modelManager.currentTtsLang != expectedLang) {
             Log.d(TAG, "TTS model not loaded for $expectedLang — attempting load")
-            modelManager.unloadStt()
             tts = modelManager.loadTtsModel(expectedLang)
         }
 
@@ -71,6 +78,9 @@ class IndicParlerTtsEngine(
                     Log.d(TAG, "TTS done in ${latencyMs}ms — samples=${pcmData.size} rate=$sampleRate")
 
                     if (pcmData.isNotEmpty()) {
+                        synchronized(replayLock) {
+                            replayCache[sentence.sequenceId] = CachedAudio(pcmData.copyOf(), sampleRate, sentence.isAlert)
+                        }
                         audioPlayer.playAudio(pcmData, sampleRate, sentence.isAlert)
                         return
                     }
@@ -85,8 +95,11 @@ class IndicParlerTtsEngine(
             }
         }
 
-        // Fallback to Android System TextToSpeech
-        Log.d(TAG, "[ITANTRA-TTS] Using Android System TextToSpeech fallback for '${sentence.text}'")
+        // Fallback to Android System TextToSpeech (works offline for all installed device languages including Tamil)
+        Log.d(TAG, "[ITANTRA-TTS] Using Android System TextToSpeech fallback for '${sentence.text}' (lang=$expectedLang)")
+        synchronized(replayLock) {
+            fallbackReplayCache[sentence.sequenceId] = sentence
+        }
         fallbackSystemTts.speak(
             RecognizedSentence(
                 text         = sentence.text,
@@ -98,10 +111,45 @@ class IndicParlerTtsEngine(
         )
     }
 
+    override fun prewarm(languageCode: String) {
+        if (isShutdown) return
+        scope.launch {
+            if (modelManager.currentTtsLang != languageCode || modelManager.getTtsEngine() == null) {
+                Log.d(TAG, "Prewarming local TTS model for $languageCode")
+                modelManager.loadTtsModel(languageCode)
+            }
+        }
+    }
+
+    override fun replay(sequenceId: Int): Boolean {
+        // 1. Check Sherpa-ONNX audio cache
+        val cachedAudio = synchronized(replayLock) { replayCache[sequenceId] }
+        if (cachedAudio != null) {
+            Log.d(TAG, "Replaying cached Sherpa-ONNX audio for seq=$sequenceId")
+            scope.launch { audioPlayer.playAudio(cachedAudio.samples, cachedAudio.sampleRate, cachedAudio.isAlert) }
+            return true
+        }
+
+        // 2. Check System TTS fallback cache
+        val cachedSentence = synchronized(replayLock) { fallbackReplayCache[sequenceId] }
+        if (cachedSentence != null) {
+            Log.d(TAG, "Replaying cached System TTS utterance for seq=$sequenceId: '${cachedSentence.text}'")
+            fallbackSystemTts.speak(cachedSentence)
+            return true
+        }
+
+        Log.w(TAG, "No replay cache found for seq=$sequenceId")
+        return false
+    }
+
     override fun shutdown() {
         Log.d(TAG, "Shutting down TTS Engine")
         isShutdown = true
         currentJob?.cancel()
+        synchronized(replayLock) { 
+            replayCache.clear() 
+            fallbackReplayCache.clear()
+        }
         audioPlayer.stop()
         fallbackSystemTts.shutdown()
         scope.cancel()

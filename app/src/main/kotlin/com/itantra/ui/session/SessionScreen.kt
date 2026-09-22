@@ -41,6 +41,7 @@ import com.itantra.session.TranscriptEntry
 import com.itantra.transport.ConnectionState
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlinx.coroutines.launch
 
 private const val TAG = "SessionScreen"
 
@@ -58,6 +59,8 @@ fun SessionScreen(
     val connectionState by vm.connectionState.collectAsStateWithLifecycle()
 
     var latencyExpanded by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
 
     // If disconnected, return to Connect screen automatically
     LaunchedEffect(connectionState) {
@@ -68,6 +71,7 @@ fun SessionScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("iTantra Walkie-Talkie") },
@@ -75,7 +79,6 @@ fun SessionScreen(
                     IconButton(onClick = {
                         Log.d(TAG, "Back button clicked — disconnecting session")
                         vm.disconnect()
-                        onNavigateBack()
                     }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Disconnect and Go Back")
                     }
@@ -111,7 +114,6 @@ fun SessionScreen(
                         onClick = {
                             Log.d(TAG, "Disconnect action clicked")
                             vm.disconnect()
-                            onNavigateBack()
                         },
                     ) {
                         Icon(
@@ -168,7 +170,19 @@ fun SessionScreen(
 
             // ── Transcript log ───────────────────────────────────────────────
             Text("Transcript", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            TranscriptLog(entries = entries, modifier = Modifier.weight(1f))
+            TranscriptLog(
+                entries = entries,
+                modifier = Modifier.weight(1f),
+                onReplay = { sequenceId ->
+                    val replayed = vm.replayReceivedAudio(sequenceId)
+                    if (!replayed) {
+                        coroutineScope.launch {
+                            snackbarHostState.showSnackbar("Voice replay is no longer available")
+                        }
+                    }
+                    replayed
+                },
+            )
         }
     }
 }
@@ -455,7 +469,11 @@ private fun WalkieTalkiePttButton(
 // Transcript log
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun TranscriptLog(entries: List<TranscriptEntry>, modifier: Modifier = Modifier) {
+private fun TranscriptLog(
+    entries: List<TranscriptEntry>,
+    modifier: Modifier = Modifier,
+    onReplay: (Int) -> Boolean,
+) {
     val listState  = rememberLazyListState()
     val timeFmt    = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()) }
 
@@ -470,13 +488,13 @@ private fun TranscriptLog(entries: List<TranscriptEntry>, modifier: Modifier = M
         contentPadding    = PaddingValues(bottom = 80.dp),
     ) {
         items(entries, key = { "${it.sequenceId}-${it.direction}-${it.sentMs}" }) { entry ->
-            TranscriptBubble(entry, timeFmt)
+            TranscriptBubble(entry, timeFmt, onReplay)
         }
     }
 }
 
 @Composable
-private fun TranscriptBubble(entry: TranscriptEntry, timeFmt: SimpleDateFormat) {
+private fun TranscriptBubble(entry: TranscriptEntry, timeFmt: SimpleDateFormat, onReplay: (Int) -> Boolean) {
     val sent = entry.direction == Direction.SENT
     val bg = when {
         entry.isAlert -> MaterialTheme.colorScheme.errorContainer
@@ -504,11 +522,19 @@ private fun TranscriptBubble(entry: TranscriptEntry, timeFmt: SimpleDateFormat) 
                     )
                 }
                 Text(entry.text, color = fg, style = MaterialTheme.typography.bodyMedium)
-                Text(
-                    "${entry.languageCode} • ${timeFmt.format(Date(entry.sentMs))}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = fg.copy(alpha = 0.55f),
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "${entry.languageCode} • ${timeFmt.format(Date(entry.sentMs))}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = fg.copy(alpha = 0.55f),
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (!sent) {
+                        IconButton(onClick = { onReplay(entry.sequenceId) }, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Default.Replay, contentDescription = "Replay received voice", tint = fg)
+                        }
+                    }
+                }
             }
         }
     }

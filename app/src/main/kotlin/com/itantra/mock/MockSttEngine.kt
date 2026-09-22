@@ -95,7 +95,7 @@ class MockSttEngine(
         shouldCapture = false
     }
 
-    fun shutdown() {
+    override fun shutdown() {
         stop()
         vadEngine.close()
         Log.d(TAG, "MockSttEngine shutdown complete")

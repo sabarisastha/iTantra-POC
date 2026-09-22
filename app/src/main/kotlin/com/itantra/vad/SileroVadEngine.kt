@@ -7,6 +7,7 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.withLock
 import java.nio.FloatBuffer
 import kotlin.math.log10
 import kotlin.math.sqrt
@@ -39,10 +40,18 @@ class SileroVadEngine(
     private var isV5 = false
     private var stateShape = longArrayOf(2, 1, 128) // Default Silero v5 state shape
 
-    // Reusable float buffers for recurrent state
-    private var stateBuffer: FloatBuffer = FloatBuffer.allocate(2 * 1 * 128)
-    private var hBuffer: FloatBuffer = FloatBuffer.allocate(2 * 1 * 64) // For Silero v4
-    private var cBuffer: FloatBuffer = FloatBuffer.allocate(2 * 1 * 64) // For Silero v4
+    private val vadMutex = kotlinx.coroutines.sync.Mutex()
+
+    private fun allocateDirectBuffer(capacity: Int): FloatBuffer {
+        return java.nio.ByteBuffer.allocateDirect(capacity * 4)
+            .order(java.nio.ByteOrder.nativeOrder())
+            .asFloatBuffer()
+    }
+
+    // Reusable direct float buffers for recurrent state (zero-copy JNI)
+    private var stateBuffer: FloatBuffer = allocateDirectBuffer(2 * 1 * 128)
+    private var hBuffer: FloatBuffer = allocateDirectBuffer(2 * 1 * 64) // For Silero v4
+    private var cBuffer: FloatBuffer = allocateDirectBuffer(2 * 1 * 64) // For Silero v4
 
     init {
         initOnnx()
@@ -72,7 +81,7 @@ class SileroVadEngine(
                 tensorInfo?.shape?.let { shape ->
                     stateShape = shape
                     val total = shape.reduce { acc, l -> acc * l }.toInt()
-                    stateBuffer = FloatBuffer.allocate(total)
+                    stateBuffer = allocateDirectBuffer(total)
                 }
                 Log.d(TAG, "Detected Silero VAD v5 architecture. State shape: ${stateShape.contentToString()}")
             } else {
@@ -93,85 +102,102 @@ class SileroVadEngine(
             return@withContext fallbackVad(pcmFrame)
         }
 
-        try {
+        // Silero VAD strictly requires 512 samples at 16kHz
+        val frameToProcess = if (pcmFrame.size == SILERO_FRAME_SIZE) {
+            pcmFrame
+        } else if (pcmFrame.size > SILERO_FRAME_SIZE) {
+            pcmFrame.copyOfRange(0, SILERO_FRAME_SIZE)
+        } else {
+            return@withContext fallbackVad(pcmFrame)
+        }
+
+        vadMutex.withLock {
             val env = ortEnv ?: return@withContext fallbackVad(pcmFrame)
             val session = ortSession ?: return@withContext fallbackVad(pcmFrame)
 
-            // Convert PCM-16 shorts to float [-1.0, 1.0]
-            val floatFrame = FloatArray(pcmFrame.size)
-            for (i in pcmFrame.indices) {
-                floatFrame[i] = pcmFrame[i] / 32768.0f
-            }
+            val createdTensors = mutableListOf<OnnxTensor>()
+            var runResult: ai.onnxruntime.OrtSession.Result? = null
 
-            val inputTensor = OnnxTensor.createTensor(env, arrayOf(floatFrame))
-            val srTensor = OnnxTensor.createTensor(env, longArrayOf(SAMPLE_RATE))
-
-            val inputs = mutableMapOf<String, OnnxTensor>()
-            inputs["input"] = inputTensor
-            inputs["sr"] = srTensor
-
-            if (isV5) {
-                stateBuffer.rewind()
-                val stateTensor = OnnxTensor.createTensor(env, stateBuffer, stateShape)
-                inputs["state"] = stateTensor
-
-                val result = session.run(inputs)
-                inputTensor.close()
-                srTensor.close()
-                stateTensor.close()
-
-                val outputTensor = result.get(0) as OnnxTensor
-                @Suppress("UNCHECKED_CAST") val prob = (outputTensor.value as Array<FloatArray>)[0][0]
-
-                // Update recurrent state for next frame
-                if (result.size() > 1) {
-                    val nextStateTensor = result.get(1) as OnnxTensor
-                    val nextStateValues = nextStateTensor.floatBuffer
-                    stateBuffer.rewind()
-                    stateBuffer.put(nextStateValues)
+            try {
+                // Convert PCM-16 shorts to float [-1.0, 1.0]
+                val floatFrame = FloatArray(frameToProcess.size)
+                for (i in frameToProcess.indices) {
+                    floatFrame[i] = frameToProcess[i] / 32768.0f
                 }
-                result.close()
 
-                return@withContext VadResult(
-                    speechProbability = prob,
-                    isSpeech = prob >= threshold
-                )
-            } else {
-                // Silero v4 fallback (h, c)
-                hBuffer.rewind()
-                cBuffer.rewind()
-                val hTensor = OnnxTensor.createTensor(env, hBuffer, longArrayOf(2, 1, 64))
-                val cTensor = OnnxTensor.createTensor(env, cBuffer, longArrayOf(2, 1, 64))
-                inputs["h"] = hTensor
-                inputs["c"] = cTensor
+                val inputTensor = OnnxTensor.createTensor(env, arrayOf(floatFrame))
+                createdTensors.add(inputTensor)
+                val srTensor = OnnxTensor.createTensor(env, longArrayOf(SAMPLE_RATE))
+                createdTensors.add(srTensor)
 
-                val result = session.run(inputs)
-                inputTensor.close()
-                srTensor.close()
-                hTensor.close()
-                cTensor.close()
+                val inputs = mutableMapOf<String, OnnxTensor>()
+                inputs["input"] = inputTensor
+                inputs["sr"] = srTensor
 
-                val outputTensor = result.get(0) as OnnxTensor
-                @Suppress("UNCHECKED_CAST") val prob = (outputTensor.value as Array<FloatArray>)[0][0]
+                if (isV5) {
+                    stateBuffer.rewind()
+                    val stateTensor = OnnxTensor.createTensor(env, stateBuffer, stateShape)
+                    createdTensors.add(stateTensor)
+                    inputs["state"] = stateTensor
 
-                if (result.size() > 2) {
-                    val nextH = (result.get(1) as OnnxTensor).floatBuffer
-                    val nextC = (result.get(2) as OnnxTensor).floatBuffer
+                    val result = session.run(inputs)
+                    runResult = result
+
+                    val outputTensor = result.get(0) as OnnxTensor
+                    @Suppress("UNCHECKED_CAST") val prob = (outputTensor.value as Array<FloatArray>)[0][0]
+
+                    // Update recurrent state for next frame
+                    if (result.size() > 1) {
+                        val nextStateTensor = result.get(1) as OnnxTensor
+                        val nextStateValues = nextStateTensor.floatBuffer
+                        stateBuffer.rewind()
+                        stateBuffer.put(nextStateValues)
+                    }
+
+                    return@withContext VadResult(
+                        speechProbability = prob,
+                        isSpeech = prob >= threshold
+                    )
+                } else {
+                    // Silero v4 fallback (h, c)
                     hBuffer.rewind()
                     cBuffer.rewind()
-                    hBuffer.put(nextH)
-                    cBuffer.put(nextC)
-                }
-                result.close()
+                    val hTensor = OnnxTensor.createTensor(env, hBuffer, longArrayOf(2, 1, 64))
+                    createdTensors.add(hTensor)
+                    val cTensor = OnnxTensor.createTensor(env, cBuffer, longArrayOf(2, 1, 64))
+                    createdTensors.add(cTensor)
+                    inputs["h"] = hTensor
+                    inputs["c"] = cTensor
 
-                return@withContext VadResult(
-                    speechProbability = prob,
-                    isSpeech = prob >= threshold
-                )
+                    val result = session.run(inputs)
+                    runResult = result
+
+                    val outputTensor = result.get(0) as OnnxTensor
+                    @Suppress("UNCHECKED_CAST") val prob = (outputTensor.value as Array<FloatArray>)[0][0]
+
+                    if (result.size() > 2) {
+                        val nextH = (result.get(1) as OnnxTensor).floatBuffer
+                        val nextC = (result.get(2) as OnnxTensor).floatBuffer
+                        hBuffer.rewind()
+                        cBuffer.rewind()
+                        hBuffer.put(nextH)
+                        cBuffer.put(nextC)
+                    }
+
+                    return@withContext VadResult(
+                        speechProbability = prob,
+                        isSpeech = prob >= threshold
+                    )
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "ONNX inference error in SileroVadEngine", t)
+                return@withContext fallbackVad(pcmFrame)
+            } finally {
+                runResult?.close()
+                for (tensor in createdTensors) {
+                    runCatching { tensor.close() }
+                }
             }
-        } catch (t: Throwable) {
-            Log.e(TAG, "ONNX inference error in SileroVadEngine", t)
-            return@withContext fallbackVad(pcmFrame)
         }
     }
 
