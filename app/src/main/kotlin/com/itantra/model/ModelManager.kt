@@ -56,12 +56,12 @@ class ModelManager(private val context: Context) {
     @Volatile private var ttsInferenceCount = 0
 
     // ── Model instances ──────────────────────────────────────────────────────
-    private var currentSttRecognizer: OfflineRecognizer? = null
-    var currentSttLang: String? = null
+    @Volatile private var currentSttRecognizer: OfflineRecognizer? = null
+    @Volatile var currentSttLang: String? = null
         private set
 
-    private var currentTtsEngine: OfflineTts? = null
-    var currentTtsLang: String? = null
+    @Volatile private var currentTtsEngine: OfflineTts? = null
+    @Volatile var currentTtsLang: String? = null
         private set
 
     // ── Observable state ─────────────────────────────────────────────────────
@@ -114,7 +114,9 @@ class ModelManager(private val context: Context) {
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "preDownloadModels failed", e)
-                _sttState.value = ModelState.Error("Download failed: ${e.message}")
+                val err = "Download failed: ${e.message}"
+                _sttState.value = ModelState.Error(err)
+                _ttsState.value = ModelState.Error(err)
             }
         }
     }

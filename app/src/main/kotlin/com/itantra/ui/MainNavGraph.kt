@@ -6,7 +6,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.itantra.model.ModelManager
 import com.itantra.session.SessionController
-import com.itantra.transport.TransportChannel
+import com.itantra.transport.TransportManager
 import com.itantra.ui.home.HomeScreen
 import com.itantra.ui.session.SessionScreen
 import kotlinx.coroutines.flow.StateFlow
@@ -16,7 +16,7 @@ private const val ROUTE_SESSION = "session"
 
 @Composable
 fun MainNavGraph(
-    transport: TransportChannel,
+    transport: TransportManager,
     sessionController: SessionController,
     modelManager: ModelManager,
     permissionsGranted: StateFlow<Boolean>

@@ -25,6 +25,7 @@ class SessionViewModel(
     fun requestFloorAndArm()                  = sessionController.requestFloorAndArm()
     fun releaseFloorAndDisarm()               = sessionController.releaseFloorAndDisarm()
     fun triggerAlert()                        = sessionController.triggerAlert()
+    fun replayReceivedAudio(sequenceId: Int): Boolean = sessionController.replayReceivedAudio(sequenceId)
     fun disconnect()                          = sessionController.disconnect()
 
     companion object {

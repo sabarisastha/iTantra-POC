@@ -55,11 +55,12 @@ interface TransportChannel {
 
 /** Lifecycle state of the transport channel. */
 sealed class ConnectionState {
-    object Idle : ConnectionState()
-    object Discovering : ConnectionState()
-    object Connecting : ConnectionState()
+    data object Idle : ConnectionState()
+    data object Discovering : ConnectionState()
+    data object Connecting : ConnectionState()
     data class Connected(val peerName: String, val isGroupOwner: Boolean) : ConnectionState()
     data class Error(val message: String) : ConnectionState()
+    data class Disconnected(val reason: String) : ConnectionState()
 }
 
 /** A peer device visible during discovery. */

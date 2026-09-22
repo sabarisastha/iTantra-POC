@@ -23,9 +23,11 @@ class ModelDownloader(private val context: Context) {
     val espeakDataDir: File = File(context.filesDir, "espeak-ng-data")
 
     fun initEspeakData() {
-        if (!espeakDataDir.exists()) {
+        val marker = File(espeakDataDir, ".complete")
+        if (!marker.exists()) {
             espeakDataDir.mkdirs()
             copyAssetFolder("espeak-ng-data", espeakDataDir.absolutePath)
+            runCatching { marker.createNewFile() }
         }
     }
 

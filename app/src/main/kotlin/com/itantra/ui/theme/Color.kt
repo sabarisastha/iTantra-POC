@@ -1,22 +1,22 @@
-﻿package com.itantra.ui.theme
+package com.itantra.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// iTantra brand palette — earthy green (communication + nature)
-val Green10  = Color(0xFF002200)
-val Green20  = Color(0xFF003A00)
-val Green30  = Color(0xFF005200)
-val Green40  = Color(0xFF276B00)
-val Green80  = Color(0xFF80E44D)
-val Green90  = Color(0xFF9CFF65)
+// Minimalist, Clean Palette
+val PrimaryBlue = Color(0xFF2563EB) // Modern attractive blue
+val PrimaryBlueDark = Color(0xFF1D4ED8)
+val PrimaryBlueLight = Color(0xFFDBEAFE)
 
-val GreenGrey30 = Color(0xFF37492D)
-val GreenGrey50 = Color(0xFF5D7052)
-val GreenGrey60 = Color(0xFF768969)
-val GreenGrey80 = Color(0xFFBBCFAE)
-val GreenGrey90 = Color(0xFFD7EBCA)
+val BackgroundLight = Color(0xFFF8FAFC)
+val SurfaceLight = Color(0xFFFFFFFF)
+val TextPrimaryLight = Color(0xFF0F172A)
+val TextSecondaryLight = Color(0xFF64748B)
 
-val Teal30 = Color(0xFF004D57)
-val Teal40 = Color(0xFF006874)
-val Teal80 = Color(0xFF4FD8E9)
-val Teal90 = Color(0xFFA2EFF9)
+val BackgroundDark = Color(0xFF0F172A)
+val SurfaceDark = Color(0xFF1E293B)
+val TextPrimaryDark = Color(0xFFF8FAFC)
+val TextSecondaryDark = Color(0xFF94A3B8)
+
+val SuccessGreen = Color(0xFF10B981)
+val ErrorRed = Color(0xFFEF4444)
+val OutlineColor = Color(0xFFE2E8F0)

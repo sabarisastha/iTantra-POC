@@ -27,6 +27,12 @@ interface TextToSpeechEngine {
      */
     fun speak(sentence: RecognizedSentence)
 
+    /** Begin loading a local language model before the first incoming transmission. */
+    fun prewarm(languageCode: String) {}
+
+    /** Replay locally cached synthesized audio. Returns false if it has expired. */
+    fun replay(sequenceId: Int): Boolean = false
+
     /** Release all TTS resources. Must be called when the engine is no longer needed. */
     fun shutdown()
 }

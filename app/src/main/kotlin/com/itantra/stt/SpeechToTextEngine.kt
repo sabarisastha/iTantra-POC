@@ -37,6 +37,9 @@ interface SpeechToTextEngine {
      * Any segment whose VAD boundary was already detected may still be emitted.
      */
     fun stop()
+
+    /** Release all STT resources. Safe to call multiple times. */
+    fun shutdown() {}
 }
 
 /**
