@@ -7,6 +7,7 @@ import com.itantra.transport.ConnectionState
 import com.itantra.transport.Payload
 import com.itantra.transport.PayloadType
 import com.itantra.transport.TransportChannel
+import com.itantra.transport.TransportManager
 import com.itantra.tts.TextToSpeechEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +15,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,6 +36,7 @@ class SessionController(
     private val sttEngine: SpeechToTextEngine,
     private val ttsEngine: TextToSpeechEngine,
     val transport: TransportChannel,
+    private val historyDao: com.itantra.db.HistoryDao? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -61,20 +64,24 @@ class SessionController(
     @Volatile private var localModeChangeTimestamp: Long = 0L
     private var floorTimeoutJob: Job? = null
     private var heartbeatJob: Job? = null
-    
-    // Continuous audio for PHONE mode
+
+    // Phone mode audio streams
     private var phoneAudioRecorder: com.itantra.audio.AudioRecorder? = null
     private var phoneAudioPlayer: com.itantra.audio.AudioPlayer? = null
     private var pcmSendChannel: Channel<FloatArray>? = null
+    private var phoneTxJob: Job? = null
+
+    // History and Metrics Tracking
+    private var sessionStartMs: Long = 0L
+    private var connectedPeerName: String = "Connected Peer"
+    private var connectedPeerAddress: String = ""
+    private var connectingPeerName: String? = null
 
     init {
-        Log.d(TAG, "SessionController initialized localPeerId=$localPeerId")
-        collectOutgoing()
-        collectIncoming()
         monitorConnectionState()
+        collectIncoming()
+        collectStt()
     }
-
-    // ── Connection monitoring ─────────────────────────────────────────────────
 
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
@@ -108,7 +115,15 @@ class SessionController(
         scope.launch {
             transport.connectionState.collect { state ->
                 when (state) {
+                    is ConnectionState.Connecting -> {
+                        connectingPeerName = transport.discoveredDevices.value.firstOrNull()?.name ?: "Peer"
+                    }
                     is ConnectionState.Connected -> {
+                        sessionStartMs = System.currentTimeMillis()
+                        connectedPeerName = state.peerName.ifBlank { "Connected Peer" }
+                        connectedPeerAddress = state.peerAddress
+                        connectingPeerName = null
+
                         // Preload before the first PTT release / first incoming speech, avoiding
                         // a model-load pause on the active communication path.
                         sttEngine.setLanguage(_selectedLanguage.value.code)
@@ -121,10 +136,66 @@ class SessionController(
                         )
                         if (_mode.value == SessionMode.PHONE) {
                             Log.d(TAG, "[ITANTRA-SESSION] Connected in PHONE mode — auto-starting phone audio")
-                            if (phoneAudioRecorder == null) startPhoneModeAudio()
+                            startPhoneModeAudio()
                         }
                     }
-                    is ConnectionState.Idle, is ConnectionState.Error -> {
+                    is ConnectionState.Error -> {
+                        val transportType = (transport as? TransportManager)?.activeKind?.value?.label ?: "P2P"
+                        if (connectingPeerName != null) {
+                            val peer = connectingPeerName ?: "Peer"
+                            val savedAlias = historyDao?.getAliasForPeer(peer)
+                            val entry = com.itantra.db.HistoryEntity(
+                                peerName = peer,
+                                peerAddress = "",
+                                alias = savedAlias,
+                                timestampMs = System.currentTimeMillis(),
+                                durationMs = 0L,
+                                transportType = transportType,
+                                languageUsed = _selectedLanguage.value.displayName,
+                                status = "FAILED"
+                            )
+                            scope.launch(Dispatchers.IO) { historyDao?.insertHistory(entry) }
+                            connectingPeerName = null
+                        } else if (sessionStartMs > 0L) {
+                            val duration = System.currentTimeMillis() - sessionStartMs
+                            val peerKey = connectedPeerAddress.ifBlank { connectedPeerName }
+                            val savedAlias = historyDao?.getAliasForPeer(peerKey)
+                            val entry = com.itantra.db.HistoryEntity(
+                                peerName = connectedPeerName,
+                                peerAddress = connectedPeerAddress,
+                                alias = savedAlias,
+                                timestampMs = sessionStartMs,
+                                durationMs = duration,
+                                transportType = transportType,
+                                languageUsed = _selectedLanguage.value.displayName,
+                                status = if (duration > 2000L) "SUCCESS" else "ABORTED"
+                            )
+                            scope.launch(Dispatchers.IO) { historyDao?.insertHistory(entry) }
+                            sessionStartMs = 0L
+                        }
+                        Log.d(TAG, "[ITANTRA-SESSION] state=ERROR — resetting session")
+                        onSessionLost()
+                    }
+                    is ConnectionState.Idle, is ConnectionState.Disconnected -> {
+                        if (sessionStartMs > 0L) {
+                            val duration = System.currentTimeMillis() - sessionStartMs
+                            val transportType = (transport as? TransportManager)?.activeKind?.value?.label ?: "P2P"
+                            val peerKey = connectedPeerAddress.ifBlank { connectedPeerName }
+                            val savedAlias = historyDao?.getAliasForPeer(peerKey)
+                            val entry = com.itantra.db.HistoryEntity(
+                                peerName = connectedPeerName,
+                                peerAddress = connectedPeerAddress,
+                                alias = savedAlias,
+                                timestampMs = sessionStartMs,
+                                durationMs = duration,
+                                transportType = transportType,
+                                languageUsed = _selectedLanguage.value.displayName,
+                                status = if (duration > 2000L) "SUCCESS" else "ABORTED"
+                            )
+                            scope.launch(Dispatchers.IO) { historyDao?.insertHistory(entry) }
+                            sessionStartMs = 0L
+                        }
+                        connectingPeerName = null
                         Log.d(TAG, "[ITANTRA-SESSION] state=DISCONNECTED — resetting session")
                         onSessionLost()
                     }
@@ -145,34 +216,42 @@ class SessionController(
         Log.d(TAG, "[ITANTRA-SESSION] session reset complete")
     }
 
-    // ── Public Control API ────────────────────────────────────────────────────
-
-    fun isSessionActive(): Boolean =
-        transport.connectionState.value is ConnectionState.Connected
-
-    fun setMode(newMode: SessionMode) {
-        requestModeChange(newMode)
-    }
-
-    fun requestModeChange(newMode: SessionMode) {
-        if (_mode.value == newMode) return
-        val reqTime = System.currentTimeMillis()
-        localModeChangeTimestamp = reqTime
-        Log.d(TAG, "requestModeChange: $newMode at $reqTime")
-        applyModeTransition(newMode)
-        scope.launch {
-            sendControlPayload(PayloadType.MODE_CHANGE, text = newMode.name, timestamp = reqTime)
+    private fun armFloorTimeout() {
+        floorTimeoutJob?.cancel()
+        floorTimeoutJob = scope.launch {
+            delay(FLOOR_TIMEOUT_MS)
+            if (_floorState.value == FloorState.REMOTE_TRANSMITTING ||
+                _floorState.value == FloorState.CHANNEL_BUSY) {
+                Log.w(TAG, "[ITANTRA-PTT] Floor timeout reached — resetting to IDLE")
+                _floorState.value = FloorState.IDLE
+            }
         }
     }
+
+    // ── Session Controls ──────────────────────────────────────────────────────
+
+    fun switchMode(targetMode: SessionMode) {
+        if (!isSessionActive()) {
+            _mode.value = targetMode
+            return
+        }
+        val timestamp = System.currentTimeMillis()
+        localModeChangeTimestamp = timestamp
+        applyModeTransition(targetMode)
+        scope.launch {
+            sendControlPayload(PayloadType.MODE_CHANGE, text = targetMode.name, timestamp = timestamp)
+        }
+    }
+
+    fun setMode(targetMode: SessionMode) = switchMode(targetMode)
 
     private fun applyModeTransition(newMode: SessionMode) {
         val old = _mode.value
         if (old == newMode) return
+        Log.d(TAG, "[ITANTRA-SESSION] Mode transitioning: $old -> $newMode")
         _mode.value = newMode
-        Log.d(TAG, "Mode: $old -> $newMode")
         when {
             old == SessionMode.PTT && newMode == SessionMode.PHONE -> {
-                // PTT -> PHONE: stop floor activity. PHONE mode does not use STT engine.
                 if (_floorState.value == FloorState.LOCAL_TRANSMITTING ||
                     _floorState.value == FloorState.WAITING_FOR_CHANNEL) {
                     scope.launch { sendControlPayload(PayloadType.RELEASE_FLOOR) }
@@ -183,41 +262,81 @@ class SessionController(
                 startPhoneModeAudio()
             }
             old == SessionMode.PHONE && newMode == SessionMode.PTT -> {
-                // PHONE -> PTT: always stop STT to ensure clean state
+                stopPhoneModeAudio()
                 sttEngine.stop()
                 floorTimeoutJob?.cancel()
                 _floorState.value = FloorState.IDLE
-                stopPhoneModeAudio()
             }
         }
     }
 
     private fun startPhoneModeAudio() {
-        Log.d(TAG, "[ITANTRA-PHONE] Starting continuous audio for PHONE mode")
-        phoneAudioPlayer = com.itantra.audio.AudioPlayer().apply { startStream() }
-        
-        val channel = Channel<FloatArray>(capacity = 64)
+        Log.d(TAG, "[ITANTRA-PHONE] Starting independent TX & RX for PHONE mode")
+        startPhoneRx()
+        startPhoneTx()
+    }
+
+    private fun startPhoneRx() {
+        if (phoneAudioPlayer != null) return
+        Log.d(TAG, "[ITANTRA-PHONE] Starting RX stream")
+        val player = com.itantra.audio.AudioPlayer()
+        val success = player.startStream(16000)
+        if (success) {
+            phoneAudioPlayer = player
+        } else {
+            Log.e("CALL", "[CALL][RX][ERROR] Failed to start phone mode audio player stream")
+        }
+    }
+
+    private fun startPhoneTx() {
+        if (phoneAudioRecorder != null) return
+        Log.d(TAG, "[ITANTRA-PHONE] Starting TX stream")
+
+        val channel = Channel<FloatArray>(capacity = 128, onBufferOverflow = BufferOverflow.DROP_OLDEST)
         pcmSendChannel = channel
-        scope.launch(Dispatchers.IO) {
+
+        phoneTxJob?.cancel()
+        phoneTxJob = scope.launch(Dispatchers.IO) {
+            // Give Android AudioFlinger / HAL a 100ms window to cleanly release microphone if STT just stopped
+            delay(100)
+            if (_mode.value != SessionMode.PHONE || !isSessionActive()) return@launch
+
+            val recorder = com.itantra.audio.AudioRecorder()
+            phoneAudioRecorder = recorder
+            val started = recorder.startRecording { floatChunk ->
+                channel.trySend(floatChunk)
+            }
+            if (!started) {
+                Log.e("CALL", "[CALL][TX][ERROR] Failed to initialize AudioRecorder for phone TX")
+                phoneAudioRecorder = null
+                return@launch
+            }
+
             for (chunk in channel) {
                 if (_mode.value == SessionMode.PHONE && isSessionActive()) {
                     runCatching { transport.sendPcm(chunk) }
+                        .onFailure { e -> Log.e("CALL", "[CALL][TX][ERROR] Failed to send PCM chunk: ${e.message}") }
                 }
             }
-        }
-        
-        phoneAudioRecorder = com.itantra.audio.AudioRecorder()
-        phoneAudioRecorder?.startRecording { floatChunk ->
-            channel.trySend(floatChunk)
         }
     }
 
     private fun stopPhoneModeAudio() {
-        Log.d(TAG, "[ITANTRA-PHONE] Stopping continuous audio for PHONE mode")
+        Log.d(TAG, "[ITANTRA-PHONE] Stopping TX & RX for PHONE mode")
+        stopPhoneTx()
+        stopPhoneRx()
+    }
+
+    private fun stopPhoneTx() {
+        phoneTxJob?.cancel()
+        phoneTxJob = null
         pcmSendChannel?.close()
         pcmSendChannel = null
         phoneAudioRecorder?.stopRecording()
         phoneAudioRecorder = null
+    }
+
+    private fun stopPhoneRx() {
         phoneAudioPlayer?.stop()
         phoneAudioPlayer = null
     }
@@ -291,20 +410,50 @@ class SessionController(
                 sendControlPayload(PayloadType.RELEASE_FLOOR, timestamp = System.currentTimeMillis())
             }
         } else if (currentFloor == FloorState.CHANNEL_BUSY) {
-            _floorState.value = FloorState.REMOTE_TRANSMITTING
+            _floorState.value = FloorState.IDLE
         }
     }
 
-    fun triggerAlert() {
-        Log.d(TAG, "triggerAlert()")
+    fun triggerAlert(latitude: Double? = null, longitude: Double? = null) {
+        Log.d(TAG, "triggerAlert(lat=$latitude, lon=$longitude)")
+        val lang = _selectedLanguage.value
         scope.launch {
-            sendSentence(
-                RecognizedSentence(
-                    text         = "[ALERT] Manual alert triggered by operator",
-                    languageCode = _selectedLanguage.value.code,
-                    isAlert      = true,
-                    timestampMs  = System.currentTimeMillis(),
-                    sequenceId   = -1,
+            val sttCompleteMs = System.currentTimeMillis()
+            val sentence = RecognizedSentence(
+                text         = lang.emergencyPhrase,
+                languageCode = lang.code,
+                isAlert      = true,
+                timestampMs  = sttCompleteMs,
+                sequenceId   = -1,
+            )
+            val payload = Payload(
+                type            = PayloadType.ALERT,
+                text            = sentence.text,
+                languageCode    = sentence.languageCode,
+                sequenceId      = sentence.sequenceId,
+                sentTimestampMs = sttCompleteMs,
+                senderId        = localPeerId,
+                latitude        = latitude,
+                longitude       = longitude
+            )
+            runCatching { transport.send(payload) }
+                .onFailure { e -> Log.e(TAG, "transport.send() alert failed", e) }
+
+            appendTranscript(
+                TranscriptEntry(
+                    direction          = Direction.SENT,
+                    text               = sentence.text,
+                    languageCode       = sentence.languageCode,
+                    isAlert            = sentence.isAlert,
+                    sequenceId         = sentence.sequenceId,
+                    sessionMode        = _mode.value,
+                    latitude           = latitude,
+                    longitude          = longitude,
+                    micPauseDetectedMs = sentence.timestampMs,
+                    sttCompleteMs      = sttCompleteMs,
+                    sentMs             = System.currentTimeMillis(),
+                    receivedMs         = 0L,
+                    ttsStartedMs       = 0L,
                 )
             )
         }
@@ -337,14 +486,21 @@ class SessionController(
 
     fun shutdown() {
         Log.d(TAG, "shutdown() from SessionController")
-        disconnect()
+        heartbeatJob?.cancel()
+        floorTimeoutJob?.cancel()
+        sttEngine.shutdown()
         ttsEngine.shutdown()
+        stopPhoneModeAudio()
         scope.cancel()
+    }
+
+    fun isSessionActive(): Boolean {
+        return transport.connectionState.value is ConnectionState.Connected
     }
 
     // ── Outgoing pipeline: STT → Transport ───────────────────────────────────
 
-    private fun collectOutgoing() {
+    private fun collectStt() {
         scope.launch {
             sttEngine.recognizedSentences
                 .catch { e -> Log.e(TAG, "STT flow error", e) }
@@ -367,6 +523,8 @@ class SessionController(
             sequenceId      = sentence.sequenceId,
             sentTimestampMs = sttCompleteMs,
             senderId        = localPeerId,
+            latitude        = null,
+            longitude       = null
         )
         runCatching { transport.send(payload) }
             .onFailure { e -> Log.e(TAG, "transport.send() failed", e) }
@@ -379,6 +537,8 @@ class SessionController(
                 isAlert            = sentence.isAlert,
                 sequenceId         = sentence.sequenceId,
                 sessionMode        = _mode.value,
+                latitude           = null,
+                longitude          = null,
                 micPauseDetectedMs = sentence.timestampMs,
                 sttCompleteMs      = sttCompleteMs,
                 sentMs             = System.currentTimeMillis(),
@@ -430,6 +590,9 @@ class SessionController(
                 .catch { e -> Log.e(TAG, "Transport receive PCM flow error", e) }
                 .collect { floatChunk ->
                     if (_mode.value == SessionMode.PHONE) {
+                        if (phoneAudioPlayer == null) {
+                            startPhoneRx()
+                        }
                         phoneAudioPlayer?.writeStream(floatChunk)
                     }
                 }
@@ -506,6 +669,7 @@ class SessionController(
 
         when (currentFloor) {
             FloorState.IDLE -> {
+                // Grant floor to remote peer and update UI state immediately
                 _floorState.value = FloorState.REMOTE_TRANSMITTING
                 armFloorTimeout()
                 scope.launch { sendControlPayload(PayloadType.FLOOR_GRANTED) }
@@ -576,10 +740,10 @@ class SessionController(
             Log.w(TAG, "Incoming speech lang mismatch: payload=${payload.languageCode} local=$localLang — TTS will attempt anyway")
         }
 
-        if (_mode.value == SessionMode.PTT && _floorState.value == FloorState.IDLE) {
-            _floorState.value = FloorState.REMOTE_TRANSMITTING
-        }
-        armFloorTimeout()
+        // CRITICAL SPEC REQUIREMENT:
+        // PTT RELEASE_FLOOR cannot be overridden by delayed/old SPEECH packets.
+        // We DO NOT set _floorState to REMOTE_TRANSMITTING here. Floor is governed strictly by
+        // REQUEST_FLOOR and RELEASE_FLOOR messages.
 
         val receivedMs = payload.receivedTimestampMs.takeIf { it > 0L } ?: System.currentTimeMillis()
         val sentence = RecognizedSentence(
@@ -588,8 +752,11 @@ class SessionController(
             isAlert      = payload.type == PayloadType.ALERT,
             timestampMs  = payload.sentTimestampMs,
             sequenceId   = payload.sequenceId,
+            receivedTimestampMs = receivedMs,
         )
 
+        Log.d(TAG, "[PTT] SPEECH_RECEIVED seq=${payload.sequenceId} text='${payload.text}' delay_since_send=${System.currentTimeMillis() - payload.sentTimestampMs}ms")
+        
         val ttsStartedMs = System.currentTimeMillis()
         ttsEngine.speak(sentence)
 
@@ -601,6 +768,8 @@ class SessionController(
                 isAlert            = sentence.isAlert,
                 sequenceId         = payload.sequenceId,
                 sessionMode        = _mode.value,
+                latitude           = payload.latitude,
+                longitude          = payload.longitude,
                 micPauseDetectedMs = payload.sentTimestampMs,
                 sttCompleteMs      = payload.sentTimestampMs,
                 sentMs             = payload.sentTimestampMs,
@@ -608,17 +777,6 @@ class SessionController(
                 ttsStartedMs       = ttsStartedMs,
             )
         )
-    }
-
-    private fun armFloorTimeout() {
-        floorTimeoutJob?.cancel()
-        floorTimeoutJob = scope.launch {
-            delay(FLOOR_TIMEOUT_MS)
-            if (_floorState.value == FloorState.REMOTE_TRANSMITTING) {
-                Log.w(TAG, "[ITANTRA-SESSION] Floor timeout — resetting REMOTE_TRANSMITTING → IDLE")
-                _floorState.value = FloorState.IDLE
-            }
-        }
     }
 
     private fun appendTranscript(entry: TranscriptEntry) {

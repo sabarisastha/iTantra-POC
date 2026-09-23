@@ -44,7 +44,7 @@ private const val TAG = "ITANTRA-MODEL"
 
 class ModelManager(private val context: Context) {
 
-    var numThreads: Int = 2
+    var numThreads: Int = minOf(4, maxOf(2, Runtime.getRuntime().availableProcessors() / 2))
     val downloader = ModelDownloader(context)
 
     // ── Coroutine-safe Mutex locks (replaces Java synchronized) ─────────────
@@ -62,6 +62,11 @@ class ModelManager(private val context: Context) {
 
     @Volatile private var currentTtsEngine: OfflineTts? = null
     @Volatile var currentTtsLang: String? = null
+        private set
+
+    @Volatile var currentTtsSpeakerId: Int = 0
+        private set
+    @Volatile var currentTtsSharedModelId: String? = null
         private set
 
     // ── Observable state ─────────────────────────────────────────────────────
@@ -99,8 +104,8 @@ class ModelManager(private val context: Context) {
 
                 // Download TTS
                 if (config.ttsModelUrl != null) {
-                    val ttsFile = downloader.modelFile("tts", lang, "model.onnx")
-                    val ttsTokens = downloader.modelFile("tts", lang, "tokens.txt")
+                    val ttsFile = if (config.ttsSharedModelId != null) downloader.sharedModelFile(config.ttsSharedModelId, "model.onnx") else downloader.modelFile("tts", lang, "model.onnx")
+                    val ttsTokens = if (config.ttsSharedModelId != null) downloader.sharedModelFile(config.ttsSharedModelId, "tokens.txt") else downloader.modelFile("tts", lang, "tokens.txt")
                     if (!ttsFile.exists() || ttsFile.length() == 0L) {
                         _ttsState.value = ModelState.Downloading(0)
                         downloader.downloadSync(config.ttsModelUrl, ttsFile) { dl, total ->
@@ -129,8 +134,8 @@ class ModelManager(private val context: Context) {
         if (!sttTokens.exists() || sttTokens.length() == 0L) return false
 
         if (config.ttsModelUrl != null) {
-            val ttsFile = downloader.modelFile("tts", lang, "model.onnx")
-            val ttsTokens = downloader.modelFile("tts", lang, "tokens.txt")
+            val ttsFile = if (config.ttsSharedModelId != null) downloader.sharedModelFile(config.ttsSharedModelId, "model.onnx") else downloader.modelFile("tts", lang, "model.onnx")
+            val ttsTokens = if (config.ttsSharedModelId != null) downloader.sharedModelFile(config.ttsSharedModelId, "tokens.txt") else downloader.modelFile("tts", lang, "tokens.txt")
             if (!ttsFile.exists() || ttsFile.length() == 0L) return false
             if (config.ttsTokensUrl != null && (!ttsTokens.exists() || ttsTokens.length() == 0L)) return false
         }
@@ -252,17 +257,19 @@ class ModelManager(private val context: Context) {
     // ── TTS ──────────────────────────────────────────────────────────────────
 
     suspend fun loadTtsModel(lang: String): OfflineTts? = ttsMutex.withLock {
-        if (currentTtsLang == lang && currentTtsEngine != null) {
-            Log.d(TAG, "TTS model for $lang already loaded — reusing")
-            _ttsState.value = ModelState.Ready
-            return@withLock currentTtsEngine
-        }
-
         val config = getLanguageConfig(lang) ?: run {
             val msg = "Unknown language: $lang"
             Log.e(TAG, msg)
             _ttsState.value = ModelState.Error(msg)
             return@withLock null
+        }
+
+        if (currentTtsEngine != null && (currentTtsLang == lang || (config.ttsSharedModelId != null && config.ttsSharedModelId == currentTtsSharedModelId))) {
+            Log.d(TAG, "TTS model already loaded (lang or shared model matches) — reusing")
+            currentTtsLang = lang
+            currentTtsSpeakerId = config.ttsSpeakerId
+            _ttsState.value = ModelState.Ready
+            return@withLock currentTtsEngine
         }
 
         if (config.ttsModelUrl == null) {
@@ -275,8 +282,8 @@ class ModelManager(private val context: Context) {
         withContext(Dispatchers.IO) {
             try {
                 _ttsState.value = ModelState.Checking
-                val modelFile  = downloader.modelFile("tts", lang, "model.onnx")
-                val tokensFile = downloader.modelFile("tts", lang, "tokens.txt")
+                val modelFile = if (config.ttsSharedModelId != null) downloader.sharedModelFile(config.ttsSharedModelId, "model.onnx") else downloader.modelFile("tts", lang, "model.onnx")
+                val tokensFile = if (config.ttsSharedModelId != null) downloader.sharedModelFile(config.ttsSharedModelId, "tokens.txt") else downloader.modelFile("tts", lang, "tokens.txt")
 
                 if (!modelFile.exists() || modelFile.length() == 0L) {
                     _ttsState.value = ModelState.Downloading(0)
@@ -296,6 +303,7 @@ class ModelManager(private val context: Context) {
                 try { currentTtsEngine?.release() } catch (e: Exception) { Log.w(TAG, "release old TTS: ${e.message}") }
                 currentTtsEngine = null
                 currentTtsLang = null
+                currentTtsSharedModelId = null
 
                 Log.d(TAG, "Creating OfflineTts for $lang")
                 val tts = OfflineTts(
@@ -305,7 +313,7 @@ class ModelManager(private val context: Context) {
                             vits = OfflineTtsVitsModelConfig().apply {
                                 model   = modelFile.absolutePath
                                 tokens  = tokensFile.absolutePath
-                                dataDir = downloader.espeakDataDir.absolutePath
+                                dataDir = if (config.ttsSharedModelId != null) "" else downloader.espeakDataDir.absolutePath
                             }
                             numThreads = this@ModelManager.numThreads
                             provider   = "cpu"
@@ -315,8 +323,10 @@ class ModelManager(private val context: Context) {
 
                 currentTtsEngine = tts
                 currentTtsLang = lang
+                currentTtsSpeakerId = config.ttsSpeakerId
+                currentTtsSharedModelId = config.ttsSharedModelId
                 _ttsState.value = ModelState.Ready
-                Log.d(TAG, "TTS model READY for $lang")
+                Log.d(TAG, "TTS model READY for $lang (speaker_id=$currentTtsSpeakerId)")
                 tts
 
             } catch (e: CancellationException) {

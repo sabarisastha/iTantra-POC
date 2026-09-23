@@ -197,7 +197,8 @@ class BluetoothSocketTransport(
         serverSocket = null
         acceptJob?.cancel()
         
-        _connectionState.value = ConnectionState.Connected(peerName, isGroupOwner)
+        val address = runCatching { socket.remoteDevice?.address }.getOrNull() ?: ""
+        _connectionState.value = ConnectionState.Connected(peerName, isGroupOwner, address)
         Log.d(TAG, "Connected to $peerName (isServer=$isGroupOwner)")
         
         receiveJob?.cancel()
@@ -216,7 +217,7 @@ class BluetoothSocketTransport(
                 FrameType.JSON_PAYLOAD -> {
                     val str = String(frame.second, Charsets.UTF_8)
                     runCatching {
-                        val payload = json.decodeFromString<Payload>(str)
+                        val payload = json.decodeFromString<Payload>(str).copy(receivedTimestampMs = System.currentTimeMillis())
                         _onPayloadReceived.emit(payload)
                     }.onFailure { Log.e(TAG, "JSON parse error", it) }
                 }

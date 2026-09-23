@@ -27,8 +27,11 @@ class HomeViewModel(
     private val transport: TransportManager,
     private val sessionController: SessionController,
     private val modelManager: ModelManager,
-    permissionsGranted: StateFlow<Boolean>
+    permissionsGranted: StateFlow<Boolean>,
+    private val historyDao: com.itantra.db.HistoryDao
 ) : ViewModel() {
+
+    val history = historyDao.getAllHistory().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val connectionState: StateFlow<ConnectionState> = transport.connectionState
         .onEach { state ->
@@ -125,16 +128,35 @@ class HomeViewModel(
 
     fun dismissWifiDialog() { _wifiOffDialog.value = false }
 
+    fun clearHistory() {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            historyDao.clearHistory()
+        }
+    }
+
+    fun updatePeerAlias(peerKey: String, alias: String?) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            historyDao.updateAlias(peerKey, alias?.trim()?.ifBlank { null })
+        }
+    }
+
+    fun updatePeerAliasById(id: Long, alias: String?) {
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            historyDao.updateAliasById(id, alias?.trim()?.ifBlank { null })
+        }
+    }
+
     companion object {
         fun factory(
             transport: TransportManager,
             sessionController: SessionController,
             modelManager: ModelManager,
-            permissionsGranted: StateFlow<Boolean>
+            permissionsGranted: StateFlow<Boolean>,
+            historyDao: com.itantra.db.HistoryDao
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                HomeViewModel(transport, sessionController, modelManager, permissionsGranted) as T
+                HomeViewModel(transport, sessionController, modelManager, permissionsGranted, historyDao) as T
         }
     }
 }

@@ -69,6 +69,10 @@ class ModelDownloader(private val context: Context) {
         return File(modelsDir, "$type/shared/$filename").also { it.parentFile?.mkdirs() }
     }
 
+    fun sharedModelFile(sharedId: String, filename: String): File {
+        return File(modelsDir, "tts/shared/$sharedId/$filename").also { it.parentFile?.mkdirs() }
+    }
+
     /**
      * Synchronously downloads [url] to [destFile] using atomic write (.tmp -> rename).
      */

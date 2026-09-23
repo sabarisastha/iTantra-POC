@@ -24,7 +24,7 @@ class SessionViewModel(
     fun setLanguage(lang: SupportedLanguage)  = sessionController.setLanguage(lang)
     fun requestFloorAndArm()                  = sessionController.requestFloorAndArm()
     fun releaseFloorAndDisarm()               = sessionController.releaseFloorAndDisarm()
-    fun triggerAlert()                        = sessionController.triggerAlert()
+    fun triggerAlert(latitude: Double? = null, longitude: Double? = null) = sessionController.triggerAlert(latitude, longitude)
     fun replayReceivedAudio(sequenceId: Int): Boolean = sessionController.replayReceivedAudio(sequenceId)
     fun disconnect()                          = sessionController.disconnect()
 
