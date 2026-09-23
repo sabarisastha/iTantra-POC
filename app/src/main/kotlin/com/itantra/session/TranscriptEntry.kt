@@ -1,4 +1,4 @@
-﻿package com.itantra.session
+package com.itantra.session
 
 /**
  * Direction of a transcript entry relative to this device.
@@ -23,6 +23,10 @@ data class TranscriptEntry(
     val isAlert: Boolean,
     val sequenceId: Int,
     val sessionMode: SessionMode,
+    
+    // Emergency Location Data
+    val latitude: Double? = null,
+    val longitude: Double? = null,
 
     /** When the VAD detected end of the speech segment on the sender's device. */
     val micPauseDetectedMs: Long,

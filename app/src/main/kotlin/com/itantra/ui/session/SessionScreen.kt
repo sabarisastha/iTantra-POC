@@ -1,12 +1,17 @@
 package com.itantra.ui.session
 
 import android.util.Log
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
+import androidx.compose.ui.platform.LocalContext
+import com.itantra.utils.LocationHelper
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
@@ -61,6 +66,7 @@ fun SessionScreen(
     var latencyExpanded by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     // If disconnected, return to Connect screen automatically
     LaunchedEffect(connectionState) {
@@ -127,7 +133,16 @@ fun SessionScreen(
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick          = { vm.triggerAlert() },
+                onClick = { 
+                    val hasPerm = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                                  ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    if (hasPerm) {
+                        val loc = LocationHelper.getLastKnownLocation(context)
+                        vm.triggerAlert(loc?.latitude, loc?.longitude)
+                    } else {
+                        vm.triggerAlert(null, null)
+                    }
+                },
                 icon             = { Icon(Icons.Default.Warning, contentDescription = null) },
                 text             = { Text("Send Alert") },
                 containerColor   = MaterialTheme.colorScheme.errorContainer,
@@ -495,6 +510,7 @@ private fun TranscriptLog(
 
 @Composable
 private fun TranscriptBubble(entry: TranscriptEntry, timeFmt: SimpleDateFormat, onReplay: (Int) -> Boolean) {
+    val context = LocalContext.current
     val sent = entry.direction == Direction.SENT
     val bg = when {
         entry.isAlert -> MaterialTheme.colorScheme.errorContainer
@@ -511,17 +527,41 @@ private fun TranscriptBubble(entry: TranscriptEntry, timeFmt: SimpleDateFormat, 
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (sent) Arrangement.End else Arrangement.Start,
     ) {
-        Surface(shape = RoundedCornerShape(12.dp), color = bg, modifier = Modifier.widthIn(max = 290.dp)) {
-            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Surface(shape = RoundedCornerShape(12.dp), color = bg, modifier = Modifier.widthIn(max = 310.dp)) {
+            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (entry.isAlert) Icon(Icons.Default.Warning, null, tint = fg, modifier = Modifier.size(13.dp))
+                    if (entry.isAlert) Icon(Icons.Default.Warning, null, tint = fg, modifier = Modifier.size(14.dp))
                     Text(
                         text  = if (sent) "↑ TRANSMITTED [${entry.sessionMode}]" else "↓ RECEIVED [${entry.sessionMode}]",
                         style = MaterialTheme.typography.labelSmall,
                         color = fg.copy(alpha = 0.65f),
                     )
                 }
-                Text(entry.text, color = fg, style = MaterialTheme.typography.bodyMedium)
+                Text(entry.text, color = fg, style = MaterialTheme.typography.bodyMedium, fontWeight = if (entry.isAlert) FontWeight.SemiBold else FontWeight.Normal)
+                
+                if (entry.isAlert && entry.latitude != null && entry.longitude != null) {
+                    val lat = entry.latitude
+                    val lon = entry.longitude
+                    val df = java.text.DecimalFormat("#.####")
+                    Text("Location: ${df.format(lat)}, ${df.format(lon)}", style = MaterialTheme.typography.bodySmall, color = fg)
+                    if (!sent) {
+                        val hasPerm = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                                      ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                        if (hasPerm) {
+                            val localLoc = LocationHelper.getLastKnownLocation(context)
+                            if (localLoc != null) {
+                                val dist = LocationHelper.calculateDistanceMeters(localLoc.latitude, localLoc.longitude, lat, lon)
+                                val bearing = LocationHelper.calculateBearing(localLoc.latitude, localLoc.longitude, lat, lon)
+                                val dir = LocationHelper.getBearingDirection(bearing)
+                                val distStr = if (dist > 1000) String.format("%.1f km", dist / 1000f) else "${dist.toInt()} m"
+                                EmergencyCompassView(bearingDeg = bearing, distanceStr = distStr, directionStr = dir)
+                            }
+                        }
+                    }
+                } else if (entry.isAlert && sent) {
+                    Text("Location unavailable", style = MaterialTheme.typography.bodySmall, color = fg.copy(alpha = 0.7f))
+                }
+                
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "${entry.languageCode} • ${timeFmt.format(Date(entry.sentMs))}",
@@ -540,6 +580,118 @@ private fun TranscriptBubble(entry: TranscriptEntry, timeFmt: SimpleDateFormat, 
     }
 }
 
+@Composable
+fun EmergencyCompassView(
+    bearingDeg: Float,
+    distanceStr: String,
+    directionStr: String,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var deviceAzimuth by remember { mutableFloatStateOf(0f) }
+
+    DisposableEffect(context) {
+        val sensorManager = context.getSystemService(android.content.Context.SENSOR_SERVICE) as? android.hardware.SensorManager
+        val rotationSensor = sensorManager?.getDefaultSensor(android.hardware.Sensor.TYPE_ROTATION_VECTOR)
+        val listener = object : android.hardware.SensorEventListener {
+            override fun onSensorChanged(event: android.hardware.SensorEvent) {
+                if (event.sensor.type == android.hardware.Sensor.TYPE_ROTATION_VECTOR) {
+                    val rotationMatrix = FloatArray(9)
+                    android.hardware.SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
+                    val orientation = FloatArray(3)
+                    android.hardware.SensorManager.getOrientation(rotationMatrix, orientation)
+                    val azimuth = Math.toDegrees(orientation[0].toDouble()).toFloat()
+                    deviceAzimuth = (azimuth + 360f) % 360f
+                }
+            }
+            override fun onAccuracyChanged(sensor: android.hardware.Sensor?, accuracy: Int) {}
+        }
+
+        if (rotationSensor != null) {
+            sensorManager.registerListener(listener, rotationSensor, android.hardware.SensorManager.SENSOR_DELAY_UI)
+        }
+        onDispose {
+            sensorManager?.unregisterListener(listener)
+        }
+    }
+
+    // Relative angle: target bearing relative to device heading
+    val relativeAngle = (bearingDeg - deviceAzimuth + 360f) % 360f
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+        modifier = modifier.padding(vertical = 4.dp).fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // Compass Dial Canvas
+            Box(modifier = Modifier.size(56.dp), contentAlignment = Alignment.Center) {
+                androidx.compose.foundation.Canvas(modifier = Modifier.fillMaxSize()) {
+                    val center = androidx.compose.ui.geometry.Offset(size.width / 2f, size.height / 2f)
+                    val radius = size.minDimension / 2f - 4f
+
+                    // Draw outer ring
+                    drawCircle(
+                        color = Color.Gray.copy(alpha = 0.35f),
+                        radius = radius,
+                        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx())
+                    )
+
+                    // Draw North marker dot rotated by -deviceAzimuth
+                    val northAngleRad = Math.toRadians((-deviceAzimuth - 90f).toDouble())
+                    val nx = center.x + (radius - 8f) * kotlin.math.cos(northAngleRad).toFloat()
+                    val ny = center.y + (radius - 8f) * kotlin.math.sin(northAngleRad).toFloat()
+                    drawCircle(
+                        color = Color(0xFF1976D2),
+                        radius = 3.dp.toPx(),
+                        center = androidx.compose.ui.geometry.Offset(nx, ny)
+                    )
+
+                    // Draw target emergency pointer rotated by relativeAngle
+                    val pointerAngleRad = Math.toRadians((relativeAngle - 90f).toDouble())
+                    val px = center.x + (radius - 4f) * kotlin.math.cos(pointerAngleRad).toFloat()
+                    val py = center.y + (radius - 4f) * kotlin.math.sin(pointerAngleRad).toFloat()
+                    drawLine(
+                        color = Color.Red,
+                        start = center,
+                        end = androidx.compose.ui.geometry.Offset(px, py),
+                        strokeWidth = 3.5.dp.toPx(),
+                        cap = androidx.compose.ui.graphics.StrokeCap.Round
+                    )
+                    drawCircle(
+                        color = Color.Red,
+                        radius = 4.dp.toPx(),
+                        center = center
+                    )
+                }
+            }
+
+            Column {
+                Text(
+                    text = "EMERGENCY BEARING",
+                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.error
+                )
+                Text(
+                    text = "$distanceStr • $directionStr (${bearingDeg.toInt()}°)",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    text = "Follow pointer to source",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Latency debug overlay
 // ─────────────────────────────────────────────────────────────────────────────
@@ -547,49 +699,98 @@ private fun TranscriptBubble(entry: TranscriptEntry, timeFmt: SimpleDateFormat, 
 private fun LatencyPanel(entries: List<TranscriptEntry>, expanded: Boolean, onToggle: () -> Unit) {
     val lastRecv = entries.lastOrNull { it.direction == Direction.RECEIVED }
 
-    Card(
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onToggle() }
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment     = Alignment.CenterVertically,
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text("⏱ Latency Debug", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                IconButton(onClick = onToggle, modifier = Modifier.size(24.dp)) {
-                    Icon(
-                        imageVector      = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = if (expanded) "Collapse" else "Expand",
+                Icon(
+                    imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.outline,
+                )
+                Text(
+                    text = "Latency Breakdown",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
+
+            if (lastRecv != null && !expanded) {
+                val totalMs = if (lastRecv.ttsStartedMs > 0 && lastRecv.micPauseDetectedMs > 0) {
+                    lastRecv.ttsStartedMs - lastRecv.micPauseDetectedMs
+                } else null
+                totalMs?.let {
+                    Text(
+                        text = "Total: $it ms",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                        color = if (it < 1500L) Color(0xFF4CAF50) else Color(0xFFFF9800),
                     )
                 }
             }
-            AnimatedVisibility(
-                visible = expanded,
-                enter   = expandVertically(),
-                exit    = shrinkVertically(),
+        }
+
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(),
+            exit = shrinkVertically(),
+        ) {
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
             ) {
                 if (lastRecv == null) {
                     Text(
-                        "No RECEIVED entries yet — send a message from the other phone.",
+                        text = "No received speech segments yet.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(top = 6.dp),
+                        modifier = Modifier.padding(12.dp),
                     )
                 } else {
-                    Column(modifier = Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        LatencyRow("Δ Model (STT inference)",          lastRecv.deltaModelMs)
-                        LatencyRow("Δ Queue (STT complete → wire)",    lastRecv.deltaQueueMs)
-                        LatencyRow("Δ Network (sent → received)",      lastRecv.deltaNetworkMs)
-                        LatencyRow("Δ TTS start (received → speak)",   lastRecv.deltaTtsStartMs)
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                        LatencyRow("Σ Total (mic pause → TTS start)",  lastRecv.totalLatencyMs, bold = true)
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
                         Text(
-                            "seq#${lastRecv.sequenceId} • ${lastRecv.languageCode}",
+                            text = "Seq #${lastRecv.sequenceId} (${lastRecv.languageCode})",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
+
+                        val sttMs = if (lastRecv.sttCompleteMs > 0 && lastRecv.micPauseDetectedMs > 0) {
+                            lastRecv.sttCompleteMs - lastRecv.micPauseDetectedMs
+                        } else null
+                        LatencyRow(label = "STT (mic pause → text)", ms = sttMs ?: 0L)
+
+                        val netMs = if (lastRecv.receivedMs > 0 && lastRecv.sentMs > 0) {
+                            lastRecv.receivedMs - lastRecv.sentMs
+                        } else null
+                        LatencyRow(label = "Transport (send → recv)", ms = netMs ?: 0L)
+
+                        val ttsMs = if (lastRecv.ttsStartedMs > 0 && lastRecv.receivedMs > 0) {
+                            lastRecv.ttsStartedMs - lastRecv.receivedMs
+                        } else null
+                        LatencyRow(label = "TTS dispatch (recv → play)", ms = ttsMs ?: 0L)
+
+                        val totalMs = if (lastRecv.ttsStartedMs > 0 && lastRecv.micPauseDetectedMs > 0) {
+                            lastRecv.ttsStartedMs - lastRecv.micPauseDetectedMs
+                        } else null
+                        HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
+                        LatencyRow(label = "TOTAL latency", ms = totalMs ?: 0L, bold = true)
                     }
                 }
             }
@@ -606,9 +807,9 @@ private fun LatencyRow(label: String, ms: Long, bold: Boolean = false) {
             style     = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
             fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
             color     = when {
-                ms < 100L  -> Color(0xFF4CAF50)   // green — fast
-                ms < 500L  -> Color(0xFFFFC107)   // amber — acceptable
-                else       -> Color(0xFFF44336)   // red — needs work
+                ms < 100L  -> Color(0xFF4CAF50)
+                ms < 500L  -> Color(0xFFFFC107)
+                else       -> Color(0xFFF44336)
             },
         )
     }

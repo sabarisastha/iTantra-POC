@@ -3,6 +3,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
 }
 
 android {
@@ -55,7 +56,7 @@ android {
 }
 
 dependencies {
-    implementation(files("libs/sherpa-onnx-1.13.7.aar"))
+    implementation(files("libs/sherpa-onnx-1.13.8.aar"))
     implementation(libs.onnxruntime.android)
     // ── Jetpack Compose BOM ──────────────────────────────────────────────────
     implementation(platform(libs.compose.bom))
@@ -82,5 +83,9 @@ dependencies {
 
     // ── kotlinx.serialization — Payload marshalling over TCP socket ──────────
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.room.runtime)
+    implementation(libs.room.ktx)
+    ksp(libs.room.compiler)
 }
+
 

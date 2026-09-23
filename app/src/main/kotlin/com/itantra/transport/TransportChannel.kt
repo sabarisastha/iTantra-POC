@@ -58,7 +58,7 @@ sealed class ConnectionState {
     data object Idle : ConnectionState()
     data object Discovering : ConnectionState()
     data object Connecting : ConnectionState()
-    data class Connected(val peerName: String, val isGroupOwner: Boolean) : ConnectionState()
+    data class Connected(val peerName: String, val isGroupOwner: Boolean, val peerAddress: String = "") : ConnectionState()
     data class Error(val message: String) : ConnectionState()
     data class Disconnected(val reason: String) : ConnectionState()
 }

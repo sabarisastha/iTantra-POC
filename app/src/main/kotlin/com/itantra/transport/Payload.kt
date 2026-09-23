@@ -21,6 +21,10 @@ data class Payload(
     /** Set locally by receiver when dequeued; NOT included in transmitted JSON. */
     @Transient
     val receivedTimestampMs: Long = 0L,
+    
+    // Emergency Location Data
+    val latitude: Double? = null,
+    val longitude: Double? = null,
 )
 
 enum class PayloadType {

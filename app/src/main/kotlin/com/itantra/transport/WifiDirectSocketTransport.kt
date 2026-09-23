@@ -436,7 +436,8 @@ class WifiDirectSocketTransport(
         // Ensure previous framed socket is closed
         runCatching { framedSocket?.close() }
         framedSocket = FramedSocket(s)
-        _connectionState.value = ConnectionState.Connected(peerName, isGroupOwner)
+        val address = runCatching { s.inetAddress?.hostAddress }.getOrNull() ?: ""
+        _connectionState.value = ConnectionState.Connected(peerName, isGroupOwner, address)
         Log.d(TAG, "[ITANTRA-SOCKET] client connected peerName=$peerName isOwner=$isGroupOwner")
 
         // Cancel old receive loop (shouldn't exist, but safety)
@@ -459,7 +460,7 @@ class WifiDirectSocketTransport(
                 FrameType.JSON_PAYLOAD -> {
                     val str = String(frame.second, Charsets.UTF_8)
                     runCatching {
-                        val payload = json.decodeFromString<Payload>(str)
+                        val payload = json.decodeFromString<Payload>(str).copy(receivedTimestampMs = System.currentTimeMillis())
                         _onPayloadReceived.emit(payload)
                     }.onFailure { Log.e(TAG, "JSON parse error: ${it.message}") }
                 }

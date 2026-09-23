@@ -51,7 +51,8 @@ class MainActivity : ComponentActivity() {
                         transport         = app.transport,
                         sessionController = app.sessionController,
                         modelManager      = app.modelManager,
-                        permissionsGranted = permissionsGranted
+                        permissionsGranted = permissionsGranted,
+                        historyDao = app.historyDao
                     )
                 }
             }
@@ -103,3 +104,4 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
