@@ -24,6 +24,7 @@ class AudioPlayer {
     @Volatile private var ttsTotalFramesWritten = 0
     @Volatile private var ttsInitialHeadPosition = 0
     @Volatile private var ttsPlaybackStartedReported = false
+    @Volatile private var isFloatEncoding = true
 
     private val lock = Any()
 
@@ -100,29 +101,49 @@ class AudioPlayer {
     ): Int {
         if (pcmData.isEmpty()) return 0
         val track: AudioTrack
+        val useFloat: Boolean
         synchronized(lock) {
             track = audioTrack ?: return 0
             if (!isTtsStreamActive || track.state != AudioTrack.STATE_INITIALIZED) return 0
+            useFloat = isFloatEncoding
         }
 
-        val written = track.write(pcmData, 0, pcmData.size, AudioTrack.WRITE_BLOCKING)
-        if (written > 0) {
-            synchronized(lock) {
-                ttsTotalFramesWritten += written
-                if (!ttsPlaybackStartedReported) {
-                    try {
-                        track.play()
-                        ttsPlaybackStartedReported = true
-                        val t5 = System.currentTimeMillis()
-                        Log.d(TAG, "[AUDIO] T5_PLAYBACK_STARTED at $t5")
-                        onFirstAudioPlayed?.invoke(t5)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "AudioTrack.play() failed on progressive start", e)
+        try {
+            val written: Int = if (useFloat) {
+                track.write(pcmData, 0, pcmData.size, AudioTrack.WRITE_BLOCKING)
+            } else {
+                val shortData = ShortArray(pcmData.size)
+                for (i in pcmData.indices) {
+                    val s = pcmData[i]
+                    val clamped = if (s > 1.0f) 1.0f else if (s < -1.0f) -1.0f else s
+                    shortData[i] = (clamped * 32767.0f).toInt().toShort()
+                }
+                track.write(shortData, 0, shortData.size, AudioTrack.WRITE_BLOCKING)
+            }
+
+            if (written > 0) {
+                synchronized(lock) {
+                    ttsTotalFramesWritten += written
+                    if (!ttsPlaybackStartedReported) {
+                        try {
+                            if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                                track.play()
+                            }
+                            ttsPlaybackStartedReported = true
+                            val t5 = System.currentTimeMillis()
+                            Log.d(TAG, "[AUDIO] T5_PLAYBACK_STARTED at $t5")
+                            onFirstAudioPlayed?.invoke(t5)
+                        } catch (e: Throwable) {
+                            Log.e(TAG, "AudioTrack.play() failed on progressive start", e)
+                        }
                     }
                 }
             }
+            return written
+        } catch (e: Throwable) {
+            Log.e(TAG, "AudioTrack.write failed in writeTtsChunk", e)
+            return 0
         }
-        return written
     }
 
     /**
@@ -244,47 +265,101 @@ class AudioPlayer {
             .setContentType(if (isAlert) AudioAttributes.CONTENT_TYPE_SONIFICATION else AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
 
-        val format = AudioFormat.Builder()
-            .setSampleRate(sampleRate)
-            .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
-            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-            .build()
-
-        val minBuffer = AudioTrack.getMinBufferSize(
+        var minBuffer = AudioTrack.getMinBufferSize(
             sampleRate,
             AudioFormat.CHANNEL_OUT_MONO,
             AudioFormat.ENCODING_PCM_FLOAT
         )
+        var encoding = AudioFormat.ENCODING_PCM_FLOAT
+        var isFloat = true
 
-        if (minBuffer == AudioTrack.ERROR || minBuffer == AudioTrack.ERROR_BAD_VALUE) {
+        if (minBuffer <= 0) {
+            Log.w(TAG, "INIT: PCM_FLOAT minBuffer error ($minBuffer), falling back to PCM_16BIT")
+            minBuffer = AudioTrack.getMinBufferSize(
+                sampleRate,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            encoding = AudioFormat.ENCODING_PCM_16BIT
+            isFloat = false
+        }
+
+        if (minBuffer <= 0) {
             Log.e(TAG, "INIT: Invalid AudioTrack buffer size for sampleRate=$sampleRate")
             return
         }
 
+        val bytesPerSample = if (isFloat) 4 else 2
         val bufSize = if (expectedSamples != null) {
-            maxOf(minBuffer * 2, expectedSamples * 4)
+            maxOf(minBuffer * 2, expectedSamples * bytesPerSample)
         } else {
-            maxOf(minBuffer * 2, sampleRate * 2) // default 1-second float buffer
+            maxOf(minBuffer * 2, sampleRate * bytesPerSample)
         }
 
-        val track = AudioTrack(
-            attributes,
-            format,
-            bufSize,
-            AudioTrack.MODE_STREAM,
-            AudioManager.AUDIO_SESSION_ID_GENERATE
-        )
+        val format = AudioFormat.Builder()
+            .setSampleRate(sampleRate)
+            .setEncoding(encoding)
+            .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+            .build()
 
-        if (track.state != AudioTrack.STATE_INITIALIZED) {
-            Log.e(TAG, "INIT: AudioTrack failed to initialize (state=${track.state})")
-            track.release()
-            return
+        try {
+            val track = AudioTrack(
+                attributes,
+                format,
+                bufSize,
+                AudioTrack.MODE_STREAM,
+                AudioManager.AUDIO_SESSION_ID_GENERATE
+            )
+
+            if (track.state != AudioTrack.STATE_INITIALIZED) {
+                Log.e(TAG, "INIT: AudioTrack failed to initialize (state=${track.state})")
+                track.release()
+                if (isFloat) {
+                    initTrack16BitFallbackLocked(sampleRate, targetUsage, attributes, expectedSamples)
+                }
+                return
+            }
+
+            audioTrack = track
+            currentSampleRate = sampleRate
+            currentUsage = targetUsage
+            isFloatEncoding = isFloat
+            Log.i(TAG, "INIT: AudioTrack initialized (sampleRate=$sampleRate isFloat=$isFloat bufSize=$bufSize)")
+        } catch (e: Throwable) {
+            Log.e(TAG, "INIT: AudioTrack creation failed with float, trying 16-bit fallback", e)
+            if (isFloat) {
+                initTrack16BitFallbackLocked(sampleRate, targetUsage, attributes, expectedSamples)
+            }
         }
+    }
 
-        audioTrack = track
-        currentSampleRate = sampleRate
-        currentUsage = targetUsage
-        Log.i(TAG, "INIT: AudioTrack initialized (sampleRate=$sampleRate bufSize=$bufSize)")
+    private fun initTrack16BitFallbackLocked(sampleRate: Int, targetUsage: Int, attributes: AudioAttributes, expectedSamples: Int?) {
+        try {
+            val minBuffer = AudioTrack.getMinBufferSize(
+                sampleRate,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT
+            )
+            if (minBuffer <= 0) return
+            val bufSize = if (expectedSamples != null) maxOf(minBuffer * 2, expectedSamples * 2) else maxOf(minBuffer * 2, sampleRate * 2)
+            val format = AudioFormat.Builder()
+                .setSampleRate(sampleRate)
+                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                .build()
+            val track = AudioTrack(attributes, format, bufSize, AudioTrack.MODE_STREAM, AudioManager.AUDIO_SESSION_ID_GENERATE)
+            if (track.state == AudioTrack.STATE_INITIALIZED) {
+                audioTrack = track
+                currentSampleRate = sampleRate
+                currentUsage = targetUsage
+                isFloatEncoding = false
+                Log.i(TAG, "INIT: AudioTrack initialized with 16-bit PCM fallback")
+            } else {
+                track.release()
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "16-bit fallback initialization failed", e)
+        }
     }
 
     fun startStream(sampleRate: Int = 16000): Boolean {
