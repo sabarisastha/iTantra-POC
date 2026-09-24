@@ -513,43 +513,35 @@ class AudioPlayer {
                     Log.d(TAG, "[TTS] T4_FIRST_AUDIO available in ${t4 - t0}ms from receive")
                 }
 
-                // Detect underrun BEFORE writing
-                val currentHead = (activeTrack.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
-                val targetHead = initialHead + totalWrittenSamples.toLong()
-                val isUnderrun = totalWrittenSamples > 0 && currentHead >= targetHead
-
-                if (isUnderrun && activeTrack.playState == AudioTrack.PLAYSTATE_PLAYING) {
-                    Log.w(TAG, "[AUDIO] Underrun detected! Head=$currentHead, target=$targetHead. Pausing track to recover.")
-                    try { activeTrack.pause() } catch (e: Throwable) { Log.e(TAG, "Pause failed", e) }
-                }
-
                 val written = writePcmToTrack(activeTrack, samples)
                 if (written > 0) {
                     totalWrittenSamples += written
                     Log.d(TAG, "[AUDIO] CHUNK ${chunk.chunkNumber} WRITTEN ($written samples)")
 
-                    if (!ttsPlaybackStartedReported || isUnderrun || activeTrack.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                    if (!ttsPlaybackStartedReported) {
+                        try {
+                            if (activeTrack.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                                activeTrack.play()
+                            }
+                            ttsPlaybackStartedReported = true
+                            t5 = System.currentTimeMillis()
+                            Log.d(TAG, "[AUDIO] T5_PLAYBACK_STARTED at $t5 (in ${t5 - t0}ms from receive)")
+                        } catch (e: Throwable) {
+                            Log.e(TAG, "AudioTrack.play() failed on start", e)
+                        }
+                    } else if (activeTrack.playState != AudioTrack.PLAYSTATE_PLAYING) {
                         try {
                             activeTrack.play()
-                            if (!ttsPlaybackStartedReported) {
-                                ttsPlaybackStartedReported = true
-                                t5 = System.currentTimeMillis()
-                                Log.d(TAG, "[AUDIO] T5_PLAYBACK_STARTED at $t5 (in ${t5 - t0}ms from receive)")
-                            } else if (isUnderrun) {
-                                Log.d(TAG, "[AUDIO] Resumed playback after underrun.")
-                            }
                         } catch (e: Throwable) {
-                            Log.e(TAG, "AudioTrack.play() failed on start/resume", e)
+                            Log.w(TAG, "Re-asserting play() failed: ${e.message}")
                         }
                     }
-                } else if (written < 0) {
-                    Log.e(TAG, "[AUDIO] writePcmToTrack returned ERROR: $written")
                 }
 
-                val newHead = (activeTrack.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
+                val curHead = (activeTrack.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
                 Log.d(
                     TAG,
-                    "[AUDIO] PLAY_STATE state=${activeTrack.state} playState=${activeTrack.playState} PLAYBACK_HEAD current=$newHead target=${initialHead + totalWrittenSamples}"
+                    "[AUDIO] PLAY_STATE state=${activeTrack.state} playState=${activeTrack.playState} PLAYBACK_HEAD current=$curHead target=${initialHead + totalWrittenSamples}"
                 )
             }
 
