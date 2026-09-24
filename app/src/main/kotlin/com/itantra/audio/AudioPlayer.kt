@@ -19,6 +19,12 @@ class AudioPlayer {
     @Volatile private var currentUsage: Int = 0
     @Volatile private var rxFrameCount: Long = 0L
 
+    // Progressive TTS streaming state
+    @Volatile private var isTtsStreamActive = false
+    @Volatile private var ttsTotalFramesWritten = 0
+    @Volatile private var ttsInitialHeadPosition = 0
+    @Volatile private var ttsPlaybackStartedReported = false
+
     private val lock = Any()
 
     /**
@@ -41,6 +47,120 @@ class AudioPlayer {
         }
     }
 
+    /**
+     * Starts a progressive TTS streaming playback session.
+     * Reuses the prewarmed/active AudioTrack if sample rate and usage match.
+     */
+    fun startTtsStream(sampleRate: Int, isAlert: Boolean = false): Boolean {
+        val targetUsage = if (isAlert) AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_MEDIA
+        synchronized(lock) {
+            val existing = audioTrack
+            if (existing != null && existing.state == AudioTrack.STATE_INITIALIZED &&
+                currentSampleRate == sampleRate && currentUsage == targetUsage) {
+                try {
+                    if (existing.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                        existing.pause()
+                    }
+                    existing.flush()
+                } catch (e: Exception) {
+                    Log.w(TAG, "AudioTrack flush failed, recreating: ${e.message}")
+                    stopInternal()
+                }
+            } else {
+                stopInternal()
+            }
+
+            if (audioTrack == null) {
+                initTrackLocked(sampleRate, targetUsage, isAlert, null)
+            }
+
+            val track = audioTrack
+            if (track == null || track.state != AudioTrack.STATE_INITIALIZED) {
+                Log.e(TAG, "INIT: AudioTrack not available for TTS progressive stream")
+                return false
+            }
+
+            isPlaying = true
+            isTtsStreamActive = true
+            ttsTotalFramesWritten = 0
+            ttsPlaybackStartedReported = false
+            ttsInitialHeadPosition = track.playbackHeadPosition
+            return true
+        }
+    }
+
+    /**
+     * Writes an incremental chunk of PCM samples into the active progressive TTS stream.
+     * AudioTrack.play() is initiated immediately on the first written chunk so the user hears
+     * speech without waiting for full synthesis.
+     */
+    fun writeTtsChunk(
+        pcmData: FloatArray,
+        onFirstAudioPlayed: ((t5: Long) -> Unit)? = null
+    ): Int {
+        if (pcmData.isEmpty()) return 0
+        val track: AudioTrack
+        synchronized(lock) {
+            track = audioTrack ?: return 0
+            if (!isTtsStreamActive || track.state != AudioTrack.STATE_INITIALIZED) return 0
+        }
+
+        val written = track.write(pcmData, 0, pcmData.size, AudioTrack.WRITE_BLOCKING)
+        if (written > 0) {
+            synchronized(lock) {
+                ttsTotalFramesWritten += written
+                if (!ttsPlaybackStartedReported) {
+                    try {
+                        track.play()
+                        ttsPlaybackStartedReported = true
+                        val t5 = System.currentTimeMillis()
+                        Log.d(TAG, "[AUDIO] T5_PLAYBACK_STARTED at $t5")
+                        onFirstAudioPlayed?.invoke(t5)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "AudioTrack.play() failed on progressive start", e)
+                    }
+                }
+            }
+        }
+        return written
+    }
+
+    /**
+     * Suspends until the AudioTrack has completely finished playing all written samples.
+     * Retains the AudioTrack in a warm state for the next utterance.
+     */
+    suspend fun awaitTtsCompletion() = withContext(Dispatchers.IO) {
+        val track = audioTrack ?: return@withContext
+        val targetHead: Long
+        val sampleRate: Int
+        synchronized(lock) {
+            targetHead = (ttsInitialHeadPosition.toLong() and 0xFFFFFFFFL) + ttsTotalFramesWritten.toLong()
+            sampleRate = currentSampleRate
+        }
+        val startTime = System.currentTimeMillis()
+        val maxWaitMs = if (sampleRate > 0) (ttsTotalFramesWritten * 1000L / sampleRate) + 2000L else 5000L
+        try {
+            while (isPlaying && isTtsStreamActive && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+                val currentHead = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                if (currentHead >= targetHead) {
+                    break
+                }
+                if (System.currentTimeMillis() - startTime > maxWaitMs) {
+                    Log.w(TAG, "awaitTtsCompletion timeout reached (${maxWaitMs}ms)")
+                    break
+                }
+                delay(20)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "awaitTtsCompletion polling error", e)
+        } finally {
+            synchronized(lock) {
+                isTtsStreamActive = false
+                isPlaying = false
+            }
+        }
+    }
+
     suspend fun playAudio(
         pcmData: FloatArray,
         sampleRate: Int,
@@ -54,7 +174,6 @@ class AudioPlayer {
 
         val targetUsage = if (isAlert) AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_MEDIA
         var track: AudioTrack?
-        var totalFramesToWrite = pcmData.size
 
         synchronized(lock) {
             val existing = audioTrack
@@ -94,7 +213,7 @@ class AudioPlayer {
             Log.d(TAG, "[AUDIO] T5_PLAYBACK_STARTED at $t5")
 
             // Bulk write pcmData in native call
-            var offset = 0
+            val offset = 0
             val writeSize = pcmData.size
             val written = activeTrack.write(pcmData, offset, writeSize, AudioTrack.WRITE_BLOCKING)
             val t6 = System.currentTimeMillis()
@@ -114,7 +233,6 @@ class AudioPlayer {
         } catch (e: Exception) {
             Log.e(TAG, "AudioPlayer.playAudio failed", e)
         } finally {
-            // Keep track warm and initialized for subsequent utterances
             isPlaying = false
         }
         Log.d(TAG, "playAudio complete: ${pcmData.size} samples at ${sampleRate}Hz")
@@ -249,6 +367,7 @@ class AudioPlayer {
 
     fun stop() {
         isPlaying = false
+        isTtsStreamActive = false
         stopInternal()
     }
 
@@ -258,6 +377,7 @@ class AudioPlayer {
             audioTrack = null
             currentSampleRate = 0
             currentUsage = 0
+            isTtsStreamActive = false
             Log.i(TAG, "STOP: Stopping playback")
             try {
                 if (track.state == AudioTrack.STATE_INITIALIZED) {
