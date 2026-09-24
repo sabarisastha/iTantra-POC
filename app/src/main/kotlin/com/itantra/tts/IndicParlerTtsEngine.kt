@@ -115,32 +115,18 @@ class IndicParlerTtsEngine(
 
                     for (segment in segments) {
                         coroutineContext.ensureActive()
-                        val genAudio = acquiredTts.generateWithCallback(segment, sid, 1.0f) { chunk ->
-                            if (chunk.isNotEmpty()) {
-                                if (t4 == 0L) {
-                                    t4 = System.currentTimeMillis()
-                                    Log.d(TAG, "[TTS] T4_FIRST_AUDIO available in ${t4 - t0}ms from receive")
-                                }
-                                accumulatedChunks.add(chunk.copyOf())
-                                audioPlayer.writeTtsChunk(chunk) { playTime ->
-                                    if (t5 == 0L) {
-                                        t5 = playTime
-                                        Log.d(TAG, "[TTS] T5_PLAYBACK_STARTED in ${t5 - t0}ms from receive")
-                                    }
-                                }
-                            }
-                            1
-                        }
-
-                        // Fail-safe: if callback was not invoked by native code for this segment, feed genAudio.samples directly
-                        if (genAudio.samples.isNotEmpty() && (accumulatedChunks.isEmpty() || t4 == 0L)) {
+                        val genAudio = acquiredTts.generate(segment, sid, 1.0f)
+                        val samples = genAudio.samples
+                        if (samples.isNotEmpty()) {
                             if (t4 == 0L) {
                                 t4 = System.currentTimeMillis()
+                                Log.d(TAG, "[TTS] T4_FIRST_AUDIO available in ${t4 - t0}ms from receive")
                             }
-                            accumulatedChunks.add(genAudio.samples.copyOf())
-                            audioPlayer.writeTtsChunk(genAudio.samples) { playTime ->
+                            accumulatedChunks.add(samples.copyOf())
+                            audioPlayer.writeTtsChunk(samples) { playTime ->
                                 if (t5 == 0L) {
                                     t5 = playTime
+                                    Log.d(TAG, "[TTS] T5_PLAYBACK_STARTED in ${t5 - t0}ms from receive")
                                 }
                             }
                         }
@@ -187,7 +173,7 @@ class IndicParlerTtsEngine(
                 } catch (e: CancellationException) {
                     Log.d(TAG, "TTS job cancelled")
                     throw e
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     Log.e(TAG, "Sherpa-ONNX TTS synthesis failed — falling back to System TTS", e)
                 } finally {
                     modelManager.releaseTtsForInference()
