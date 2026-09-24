@@ -4,6 +4,7 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -284,21 +285,22 @@ class AudioPlayer {
             .setContentType(if (isAlert) AudioAttributes.CONTENT_TYPE_SONIFICATION else AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
 
-        var minBuffer = AudioTrack.getMinBufferSize(
-            sampleRate,
-            AudioFormat.CHANNEL_OUT_MONO,
-            AudioFormat.ENCODING_PCM_FLOAT
-        )
         var encoding = AudioFormat.ENCODING_PCM_FLOAT
         var isFloat = true
+        var minBuffer = 0
+
+        if (Build.VERSION.SDK_INT < 24) {
+            Log.w(TAG, "INIT: Forcing 16-bit PCM for API < 24 to avoid Float PCM hardware bugs")
+            encoding = AudioFormat.ENCODING_PCM_16BIT
+            isFloat = false
+            minBuffer = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        } else {
+            minBuffer = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
+        }
 
         if (minBuffer <= 0) {
-            Log.w(TAG, "INIT: PCM_FLOAT minBuffer error ($minBuffer), falling back to PCM_16BIT")
-            minBuffer = AudioTrack.getMinBufferSize(
-                sampleRate,
-                AudioFormat.CHANNEL_OUT_MONO,
-                AudioFormat.ENCODING_PCM_16BIT
-            )
+            Log.w(TAG, "INIT: PCM buffer error ($minBuffer), forcing fallback to PCM_16BIT")
+            minBuffer = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
             encoding = AudioFormat.ENCODING_PCM_16BIT
             isFloat = false
         }
@@ -497,7 +499,7 @@ class AudioPlayer {
                 return@withContext
             }
 
-            val initialHead = (activeTrack.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
+            var initialHead = (activeTrack.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
 
             for (chunk in channel) {
                 if (chunk.isEos) {
@@ -513,35 +515,51 @@ class AudioPlayer {
                     Log.d(TAG, "[TTS] T4_FIRST_AUDIO available in ${t4 - t0}ms from receive")
                 }
 
+                // Detect underrun to clear deadlocked hardware state
+                val currentHead = (activeTrack.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
+                val targetHead = initialHead + totalWrittenSamples.toLong()
+                val isUnderrun = totalWrittenSamples > 0 && currentHead >= targetHead
+
+                if (isUnderrun) {
+                    Log.w(TAG, "[AUDIO] Underrun detected (head=$currentHead, target=$targetHead). Resetting track.")
+                    try {
+                        activeTrack.pause()
+                        activeTrack.flush()
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "AudioTrack pause/flush failed", e)
+                    }
+                    // flush() resets the head position to 0 (or baseline)
+                    initialHead = (activeTrack.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
+                    totalWrittenSamples = 0
+                }
+
+                // CRITICAL FIX: Always assert PLAYING *before* a blocking write!
+                // Otherwise, writing a chunk larger than the buffer will deadlock forever.
+                if (activeTrack.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                    try {
+                        activeTrack.play()
+                        if (!ttsPlaybackStartedReported) {
+                            ttsPlaybackStartedReported = true
+                            t5 = System.currentTimeMillis()
+                            Log.d(TAG, "[AUDIO] T5_PLAYBACK_STARTED at $t5 (in ${t5 - t0}ms from receive)")
+                        }
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "AudioTrack.play() failed on start/resume", e)
+                    }
+                }
+
                 val written = writePcmToTrack(activeTrack, samples)
                 if (written > 0) {
                     totalWrittenSamples += written
                     Log.d(TAG, "[AUDIO] CHUNK ${chunk.chunkNumber} WRITTEN ($written samples)")
-
-                    if (!ttsPlaybackStartedReported) {
-                        try {
-                            if (activeTrack.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                                activeTrack.play()
-                            }
-                            ttsPlaybackStartedReported = true
-                            t5 = System.currentTimeMillis()
-                            Log.d(TAG, "[AUDIO] T5_PLAYBACK_STARTED at $t5 (in ${t5 - t0}ms from receive)")
-                        } catch (e: Throwable) {
-                            Log.e(TAG, "AudioTrack.play() failed on start", e)
-                        }
-                    } else if (activeTrack.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                        try {
-                            activeTrack.play()
-                        } catch (e: Throwable) {
-                            Log.w(TAG, "Re-asserting play() failed: ${e.message}")
-                        }
-                    }
+                } else if (written < 0) {
+                    Log.e(TAG, "[AUDIO] writePcmToTrack returned ERROR: $written")
                 }
 
-                val curHead = (activeTrack.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
+                val newHead = (activeTrack.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
                 Log.d(
                     TAG,
-                    "[AUDIO] PLAY_STATE state=${activeTrack.state} playState=${activeTrack.playState} PLAYBACK_HEAD current=$curHead target=${initialHead + totalWrittenSamples}"
+                    "[AUDIO] PLAY_STATE state=${activeTrack.state} playState=${activeTrack.playState} PLAYBACK_HEAD current=$newHead target=${initialHead + totalWrittenSamples}"
                 )
             }
 
