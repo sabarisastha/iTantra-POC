@@ -65,25 +65,10 @@ class AudioPlayer {
     fun startTtsStream(sampleRate: Int, isAlert: Boolean = false): Boolean {
         val targetUsage = if (isAlert) AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_MEDIA
         synchronized(lock) {
-            val existing = audioTrack
-            if (existing != null && existing.state == AudioTrack.STATE_INITIALIZED &&
-                currentSampleRate == sampleRate && currentUsage == targetUsage) {
-                try {
-                    if (existing.playState == AudioTrack.PLAYSTATE_PLAYING) {
-                        existing.pause()
-                    }
-                    existing.flush()
-                } catch (e: Exception) {
-                    Log.w(TAG, "AudioTrack flush failed, recreating: ${e.message}")
-                    stopInternal()
-                }
-            } else {
-                stopInternal()
-            }
-
-            if (audioTrack == null) {
-                initTrackLocked(sampleRate, targetUsage, isAlert, null)
-            }
+            // ALWAYS recreate AudioTrack. Legacy devices (API 23) severely corrupt their
+            // native mixer state if you pause() and flush() a STREAM track between utterances.
+            stopInternal()
+            initTrackLocked(sampleRate, targetUsage, isAlert, null)
 
             val track = audioTrack
             if (track == null || track.state != AudioTrack.STATE_INITIALIZED) {
@@ -217,26 +202,9 @@ class AudioPlayer {
         var track: AudioTrack?
 
         synchronized(lock) {
-            val existing = audioTrack
-            if (existing != null && existing.state == AudioTrack.STATE_INITIALIZED &&
-                currentSampleRate == sampleRate && currentUsage == targetUsage) {
-                // Warm path: reuse existing AudioTrack instance
-                try {
-                    if (existing.playState == AudioTrack.PLAYSTATE_PLAYING) {
-                        existing.pause()
-                    }
-                    existing.flush()
-                } catch (e: Exception) {
-                    Log.w(TAG, "AudioTrack flush failed, recreating: ${e.message}")
-                    stopInternal()
-                }
-            } else {
-                stopInternal()
-            }
-
-            if (audioTrack == null) {
-                initTrackLocked(sampleRate, targetUsage, isAlert, pcmData.size)
-            }
+            // ALWAYS recreate AudioTrack for legacy device stability
+            stopInternal()
+            initTrackLocked(sampleRate, targetUsage, isAlert, pcmData.size)
 
             track = audioTrack
             if (track == null || track?.state != AudioTrack.STATE_INITIALIZED) {
