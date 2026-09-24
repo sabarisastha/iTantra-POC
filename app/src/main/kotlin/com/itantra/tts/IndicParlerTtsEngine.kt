@@ -70,9 +70,13 @@ class IndicParlerTtsEngine(
                 Log.w(TAG, "[TTS] Normal speech dropped/deferred: emergency alert is playing")
                 return
             }
-            // Cancel any previous normal speech to avoid backlog build-up, and synthesize immediately
-            currentJob?.cancel()
+            // For normal PTT messages, launch sequentially or await active job so mid-sentence is not cut off by duplicate events
+            val prevJob = currentJob
             currentJob = scope.launch(Dispatchers.Default) {
+                if (prevJob != null && prevJob.isActive) {
+                    Log.d(TAG, "[TTS] Awaiting previous active speech job completion before starting new sentence")
+                    try { prevJob.join() } catch (_: Throwable) {}
+                }
                 synthesizeAndPlay(sentence, t0, t1)
             }
         }
@@ -113,9 +117,12 @@ class IndicParlerTtsEngine(
                     var t5 = 0L
                     val accumulatedChunks = mutableListOf<FloatArray>()
 
-                    for (segment in segments) {
+                    for ((index, segment) in segments.withIndex()) {
+                        val chunkNum = index + 1
+                        Log.d(TAG, "[TTS] CHUNK $chunkNum START")
                         coroutineContext.ensureActive()
                         val genAudio = acquiredTts.generate(segment, sid, 1.0f)
+                        Log.d(TAG, "[TTS] CHUNK $chunkNum END")
                         val samples = genAudio.samples
                         if (samples.isNotEmpty()) {
                             if (t4 == 0L) {
@@ -123,7 +130,7 @@ class IndicParlerTtsEngine(
                                 Log.d(TAG, "[TTS] T4_FIRST_AUDIO available in ${t4 - t0}ms from receive")
                             }
                             accumulatedChunks.add(samples.copyOf())
-                            audioPlayer.writeTtsChunk(samples) { playTime ->
+                            audioPlayer.writeTtsChunk(samples, chunkNum) { playTime ->
                                 if (t5 == 0L) {
                                     t5 = playTime
                                     Log.d(TAG, "[TTS] T5_PLAYBACK_STARTED in ${t5 - t0}ms from receive")
