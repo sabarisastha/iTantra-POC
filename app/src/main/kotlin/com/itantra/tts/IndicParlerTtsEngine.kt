@@ -11,7 +11,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlin.coroutines.coroutineContext
 
 private const val TAG = "IndicParlerTtsEngine"
 private const val BENCH_TAG = "TTS_BENCH"
@@ -94,29 +96,94 @@ class IndicParlerTtsEngine(
             if (acquiredTts != null) {
                 try {
                     val sid = modelManager.currentTtsSpeakerId
-                    val t3 = System.currentTimeMillis()
-                    Log.d(TAG, "[TTS] SYNTHESIS_STARTED via Sherpa-ONNX (speakerId=$sid)...")
-                    
-                    val generatedAudio = acquiredTts.generate(sentence.text, sid, 1.0f)
-                    
-                    val t4 = System.currentTimeMillis()
-                    val latencyMs = t4 - t3
-                    Log.d(TAG, "[TTS] SYNTHESIS_COMPLETED in ${latencyMs}ms")
+                    val sampleRate = acquiredTts.sampleRate()
+                    val segments = TextSegmenter.segment(sentence.text)
+                    if (segments.isEmpty()) return
 
-                    val pcmData    = generatedAudio.samples
-                    val sampleRate = generatedAudio.sampleRate
-                    Log.d(TAG, "TTS done — samples=${pcmData.size} rate=$sampleRate")
-
-                    if (pcmData.isNotEmpty()) {
-                        synchronized(replayLock) {
-                            replayCache[sentence.sequenceId] = CachedAudio(pcmData.copyOf(), sampleRate, sentence.isAlert)
-                        }
-                        audioPlayer.playAudio(pcmData, sampleRate, sentence.isAlert) { pt5, pt6 ->
-                            val totalMs = pt6 - t0
-                            Log.i(BENCH_TAG, "[TTS_BENCH] T0_RECEIVED=$t0 T1_REQUESTED=$t1 T2_MODEL_READY=$t2 T3_SYNTHESIS_START=$t3 T4_SYNTHESIS_END=$t4 T5_PLAYBACK_START=$pt5 T6_FIRST_BUFFER=$pt6 TOTAL_LATENCY_MS=$totalMs")
-                        }
+                    val streamStarted = audioPlayer.startTtsStream(sampleRate, sentence.isAlert)
+                    if (!streamStarted) {
+                        Log.e(TAG, "Failed to start TTS stream in AudioPlayer")
                         return
                     }
+
+                    val t3 = System.currentTimeMillis()
+                    Log.d(TAG, "[TTS] SYNTHESIS_STARTED via Sherpa-ONNX (speakerId=$sid, segments=${segments.size})...")
+
+                    var t4 = 0L
+                    var t5 = 0L
+                    val accumulatedChunks = mutableListOf<FloatArray>()
+
+                    for (segment in segments) {
+                        coroutineContext.ensureActive()
+                        val genAudio = acquiredTts.generateWithCallback(segment, sid, 1.0f) { chunk ->
+                            if (chunk.isNotEmpty()) {
+                                if (t4 == 0L) {
+                                    t4 = System.currentTimeMillis()
+                                    Log.d(TAG, "[TTS] T4_FIRST_AUDIO available in ${t4 - t0}ms from receive")
+                                }
+                                accumulatedChunks.add(chunk.copyOf())
+                                audioPlayer.writeTtsChunk(chunk) { playTime ->
+                                    if (t5 == 0L) {
+                                        t5 = playTime
+                                        Log.d(TAG, "[TTS] T5_PLAYBACK_STARTED in ${t5 - t0}ms from receive")
+                                    }
+                                }
+                            }
+                            1
+                        }
+
+                        // Fail-safe: if callback was not invoked by native code for this segment, feed genAudio.samples directly
+                        if (genAudio.samples.isNotEmpty() && (accumulatedChunks.isEmpty() || t4 == 0L)) {
+                            if (t4 == 0L) {
+                                t4 = System.currentTimeMillis()
+                            }
+                            accumulatedChunks.add(genAudio.samples.copyOf())
+                            audioPlayer.writeTtsChunk(genAudio.samples) { playTime ->
+                                if (t5 == 0L) {
+                                    t5 = playTime
+                                }
+                            }
+                        }
+                    }
+
+                    val t6 = System.currentTimeMillis()
+                    Log.d(TAG, "[TTS] T6_SYNTHESIS_COMPLETED in ${t6 - t3}ms")
+
+                    // Cache complete audio for instant replay
+                    val totalSamples = accumulatedChunks.sumOf { it.size }
+                    if (totalSamples > 0) {
+                        val fullPcm = FloatArray(totalSamples)
+                        var offset = 0
+                        for (c in accumulatedChunks) {
+                            System.arraycopy(c, 0, fullPcm, offset, c.size)
+                            offset += c.size
+                        }
+                        synchronized(replayLock) {
+                            replayCache[sentence.sequenceId] = CachedAudio(fullPcm, sampleRate, sentence.isAlert)
+                        }
+                    }
+
+                    // Await full audio completion on hardware track
+                    audioPlayer.awaitTtsCompletion()
+                    val t7 = System.currentTimeMillis()
+
+                    if (t5 == 0L) {
+                        t5 = t4.takeIf { it > 0L } ?: t6
+                    }
+                    if (t4 == 0L) {
+                        t4 = t5
+                    }
+
+                    val firstAudibleLatencyMs = t5 - t0
+                    val firstAudioGenMs = t4 - t0
+                    val totalSynthesisMs = t6 - t0
+                    val totalLatencyMs = t7 - t0
+
+                    Log.i(
+                        BENCH_TAG,
+                        "[TTS_BENCH] T0_RECEIVED=$t0 T1_REQUESTED=$t1 T2_MODEL_READY=$t2 T3_SYNTHESIS_START=$t3 T4_FIRST_AUDIO=$t4 T5_PLAYBACK_START=$t5 T6_SYNTHESIS_END=$t6 T7_PLAYBACK_END=$t7 FIRST_AUDIBLE_LATENCY_MS=$firstAudibleLatencyMs FIRST_AUDIO_GEN_MS=$firstAudioGenMs TOTAL_SYNTHESIS_MS=$totalSynthesisMs TOTAL_LATENCY_MS=$totalLatencyMs"
+                    )
+                    return
                 } catch (e: CancellationException) {
                     Log.d(TAG, "TTS job cancelled")
                     throw e
@@ -134,6 +201,7 @@ class IndicParlerTtsEngine(
         synchronized(replayLock) {
             fallbackReplayCache[sentence.sequenceId] = sentence
         }
+        val pt4 = System.currentTimeMillis()
         val pt5 = System.currentTimeMillis()
         fallbackSystemTts.speak(
             RecognizedSentence(
@@ -145,8 +213,15 @@ class IndicParlerTtsEngine(
             )
         )
         val pt6 = System.currentTimeMillis()
-        val totalMs = pt6 - t0
-        Log.i(BENCH_TAG, "[TTS_BENCH] T0_RECEIVED=$t0 T1_REQUESTED=$t1 T2_MODEL_READY=$t2 T3_SYNTHESIS_START=$fallbackStart T4_SYNTHESIS_END=$fallbackStart T5_PLAYBACK_START=$pt5 T6_FIRST_BUFFER=$pt6 TOTAL_LATENCY_MS=$totalMs")
+        val pt7 = pt6
+        val firstAudibleLatencyMs = pt5 - t0
+        val firstAudioGenMs = pt4 - t0
+        val totalSynthesisMs = pt6 - t0
+        val totalLatencyMs = pt7 - t0
+        Log.i(
+            BENCH_TAG,
+            "[TTS_BENCH] T0_RECEIVED=$t0 T1_REQUESTED=$t1 T2_MODEL_READY=$t2 T3_SYNTHESIS_START=$fallbackStart T4_FIRST_AUDIO=$pt4 T5_PLAYBACK_START=$pt5 T6_SYNTHESIS_END=$pt6 T7_PLAYBACK_END=$pt7 FIRST_AUDIBLE_LATENCY_MS=$firstAudibleLatencyMs FIRST_AUDIO_GEN_MS=$firstAudioGenMs TOTAL_SYNTHESIS_MS=$totalSynthesisMs TOTAL_LATENCY_MS=$totalLatencyMs"
+        )
     }
 
     override fun prewarm(languageCode: String) {
