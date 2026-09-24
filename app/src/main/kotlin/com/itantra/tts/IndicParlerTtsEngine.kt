@@ -6,6 +6,8 @@ import com.itantra.audio.AudioPlayer
 import com.itantra.model.ModelManager
 import com.itantra.model.ModelState
 import com.itantra.stt.RecognizedSentence
+import kotlinx.coroutines.channels.Channel
+import com.itantra.audio.PcmChunk
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -104,48 +106,55 @@ class IndicParlerTtsEngine(
                     val segments = TextSegmenter.segment(sentence.text)
                     if (segments.isEmpty()) return
 
-                    val streamStarted = audioPlayer.startTtsStream(sampleRate, sentence.isAlert)
-                    if (!streamStarted) {
-                        Log.e(TAG, "Failed to start TTS stream in AudioPlayer")
-                        return
-                    }
-
                     val t3 = System.currentTimeMillis()
                     Log.d(TAG, "[TTS] SYNTHESIS_STARTED via Sherpa-ONNX (speakerId=$sid, segments=${segments.size})...")
 
-                    var t4 = 0L
-                    var t5 = 0L
+                    val pcmChannel = Channel<PcmChunk>(Channel.UNLIMITED)
+                    
+                    // Consumer: Launches audio writer on Dispatchers.IO
+                    val playbackJob = scope.launch(Dispatchers.IO) {
+                        audioPlayer.playTtsQueue(
+                            channel = pcmChannel,
+                            sampleRate = sampleRate,
+                            isAlert = sentence.isAlert,
+                            t0 = t0,
+                            t1 = t1,
+                            t2 = t2,
+                            t3 = t3,
+                            sequenceId = sentence.sequenceId
+                        )
+                    }
+
+                    // Producer: Synthesizes chunks and pushes to Channel
+                    var totalGeneratedSamples = 0
                     val accumulatedChunks = mutableListOf<FloatArray>()
+                    val totalSegments = segments.size
 
                     for ((index, segment) in segments.withIndex()) {
                         val chunkNum = index + 1
                         Log.d(TAG, "[TTS] CHUNK $chunkNum START")
                         coroutineContext.ensureActive()
+
+                        val tChunkStart = System.currentTimeMillis()
                         val genAudio = acquiredTts.generate(segment, sid, 1.0f)
-                        Log.d(TAG, "[TTS] CHUNK $chunkNum END")
+                        Log.d(TAG, "[TTS] CHUNK $chunkNum END (took ${System.currentTimeMillis() - tChunkStart}ms)")
+
                         val samples = genAudio.samples
                         if (samples.isNotEmpty()) {
-                            if (t4 == 0L) {
-                                t4 = System.currentTimeMillis()
-                                Log.d(TAG, "[TTS] T4_FIRST_AUDIO available in ${t4 - t0}ms from receive")
-                            }
+                            totalGeneratedSamples += samples.size
                             accumulatedChunks.add(samples.copyOf())
-                            audioPlayer.writeTtsChunk(samples, chunkNum) { playTime ->
-                                if (t5 == 0L) {
-                                    t5 = playTime
-                                    Log.d(TAG, "[TTS] T5_PLAYBACK_STARTED in ${t5 - t0}ms from receive")
-                                }
-                            }
+                            Log.d(TAG, "[AUDIO] CHUNK $chunkNum QUEUED (${samples.size} samples)")
+                            pcmChannel.send(PcmChunk(chunkNum, samples, isEos = false))
                         }
                     }
 
-                    val t6 = System.currentTimeMillis()
-                    Log.d(TAG, "[TTS] T6_SYNTHESIS_COMPLETED in ${t6 - t3}ms")
+                    // Send EOS token to Consumer
+                    Log.d(TAG, "[AUDIO] CHUNK EOS QUEUED (totalChunks=$totalSegments totalGeneratedSamples=$totalGeneratedSamples)")
+                    pcmChannel.send(PcmChunk(totalSegments + 1, FloatArray(0), isEos = true))
 
-                    // Cache complete audio for instant replay
-                    val totalSamples = accumulatedChunks.sumOf { it.size }
-                    if (totalSamples > 0) {
-                        val fullPcm = FloatArray(totalSamples)
+                    // Store complete concatenated array for instant replay
+                    if (totalGeneratedSamples > 0) {
+                        val fullPcm = FloatArray(totalGeneratedSamples)
                         var offset = 0
                         for (c in accumulatedChunks) {
                             System.arraycopy(c, 0, fullPcm, offset, c.size)
@@ -156,26 +165,8 @@ class IndicParlerTtsEngine(
                         }
                     }
 
-                    // Await full audio completion on hardware track
-                    audioPlayer.awaitTtsCompletion()
-                    val t7 = System.currentTimeMillis()
-
-                    if (t5 == 0L) {
-                        t5 = t4.takeIf { it > 0L } ?: t6
-                    }
-                    if (t4 == 0L) {
-                        t4 = t5
-                    }
-
-                    val firstAudibleLatencyMs = t5 - t0
-                    val firstAudioGenMs = t4 - t0
-                    val totalSynthesisMs = t6 - t0
-                    val totalLatencyMs = t7 - t0
-
-                    Log.i(
-                        BENCH_TAG,
-                        "[TTS_BENCH] T0_RECEIVED=$t0 T1_REQUESTED=$t1 T2_MODEL_READY=$t2 T3_SYNTHESIS_START=$t3 T4_FIRST_AUDIO=$t4 T5_PLAYBACK_START=$t5 T6_SYNTHESIS_END=$t6 T7_PLAYBACK_END=$t7 FIRST_AUDIBLE_LATENCY_MS=$firstAudibleLatencyMs FIRST_AUDIO_GEN_MS=$firstAudioGenMs TOTAL_SYNTHESIS_MS=$totalSynthesisMs TOTAL_LATENCY_MS=$totalLatencyMs"
-                    )
+                    // Await Consumer playback completion
+                    playbackJob.join()
                     return
                 } catch (e: CancellationException) {
                     Log.d(TAG, "TTS job cancelled")

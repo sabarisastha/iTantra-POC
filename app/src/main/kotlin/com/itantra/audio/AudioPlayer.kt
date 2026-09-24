@@ -6,10 +6,19 @@ import android.media.AudioManager
 import android.media.AudioTrack
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
-private const val TAG = "ITAN-AUDIO-PLAY"
+private const val TAG = "AudioPlayer"
+private const val BENCH_TAG = "TTS_BENCH"
+
+data class PcmChunk(
+    val chunkNumber: Int,
+    val samples: FloatArray,
+    val isEos: Boolean = false
+)
+
 
 class AudioPlayer {
 
@@ -447,6 +456,166 @@ class AudioPlayer {
             Log.v(TAG, "WRITE: Stream wrote $written samples")
         } catch (e: Exception) {
             Log.e("CALL", "[CALL][RX][ERROR] Stream write failed: ${e.message}", e)
+        }
+    }
+
+    
+    /**
+     * Consumes PcmChunks from a bounded/unlimited Channel, writes PCM samples into
+     * a SINGLE continuous AudioTrack stream, and stops only after the EOS chunk
+     * has been physically played by the hardware DAC.
+     */
+    suspend fun playTtsQueue(
+        channel: Channel<PcmChunk>,
+        sampleRate: Int,
+        isAlert: Boolean,
+        t0: Long,
+        t1: Long,
+        t2: Long,
+        t3: Long,
+        sequenceId: Int
+    ) = withContext(Dispatchers.IO) {
+        var totalWrittenSamples = 0
+        var totalChunks = 0
+        var t4 = 0L
+        var t5 = 0L
+        var track: AudioTrack? = null
+
+        try {
+            val streamStarted = startTtsStream(sampleRate, isAlert)
+            if (!streamStarted) {
+                Log.e(TAG, "playTtsQueue: startTtsStream failed")
+                return@withContext
+            }
+
+            synchronized(lock) {
+                track = audioTrack
+            }
+            val activeTrack = track
+            if (activeTrack == null || activeTrack.state != AudioTrack.STATE_INITIALIZED) {
+                Log.e(TAG, "playTtsQueue: AudioTrack null or uninitialized")
+                return@withContext
+            }
+
+            val initialHead = (activeTrack.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
+
+            for (chunk in channel) {
+                if (chunk.isEos) {
+                    Log.d(TAG, "[AUDIO] EOS chunk received in consumer loop")
+                    break
+                }
+                if (chunk.samples.isEmpty()) continue
+
+                totalChunks++
+                val samples = chunk.samples
+                if (t4 == 0L) {
+                    t4 = System.currentTimeMillis()
+                    Log.d(TAG, "[TTS] T4_FIRST_AUDIO available in ${t4 - t0}ms from receive")
+                }
+
+                val written = writePcmToTrack(activeTrack, samples)
+                if (written > 0) {
+                    totalWrittenSamples += written
+                    Log.d(TAG, "[AUDIO] CHUNK ${chunk.chunkNumber} WRITTEN ($written samples)")
+
+                    if (!ttsPlaybackStartedReported) {
+                        try {
+                            if (activeTrack.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                                activeTrack.play()
+                            }
+                            ttsPlaybackStartedReported = true
+                            t5 = System.currentTimeMillis()
+                            Log.d(TAG, "[AUDIO] T5_PLAYBACK_STARTED at $t5 (in ${t5 - t0}ms from receive)")
+                        } catch (e: Throwable) {
+                            Log.e(TAG, "AudioTrack.play() failed on start", e)
+                        }
+                    } else if (activeTrack.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                        try {
+                            activeTrack.play()
+                        } catch (e: Throwable) {
+                            Log.w(TAG, "Re-asserting play() failed: ${e.message}")
+                        }
+                    }
+                }
+
+                val curHead = (activeTrack.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
+                Log.d(
+                    TAG,
+                    "[AUDIO] PLAY_STATE state=${activeTrack.state} playState=${activeTrack.playState} PLAYBACK_HEAD current=$curHead target=${initialHead + totalWrittenSamples}"
+                )
+            }
+
+            // EOS reached: Calculate final target head position and wait for hardware playback to complete
+            val targetHead = initialHead + totalWrittenSamples.toLong()
+            Log.d(
+                TAG,
+                "[AUDIO] EOS WAIT START: totalChunks=$totalChunks totalWrittenSamples=$totalWrittenSamples targetHead=$targetHead initialHead=$initialHead"
+            )
+
+            val startTime = System.currentTimeMillis()
+            val maxWaitMs = if (sampleRate > 0) (totalWrittenSamples * 1000L / sampleRate) + 3000L else 7000L
+
+            while (isPlaying && isTtsStreamActive) {
+                val currentHead = activeTrack.playbackHeadPosition.toLong() and 0xFFFFFFFFL
+                if (currentHead >= targetHead) {
+                    break
+                }
+                if (activeTrack.playState != AudioTrack.PLAYSTATE_PLAYING && isPlaying && isTtsStreamActive) {
+                    try { activeTrack.play() } catch (e: Throwable) { Log.w(TAG, "Re-assert play in EOS wait failed: ${e.message}") }
+                }
+                if (System.currentTimeMillis() - startTime > maxWaitMs) {
+                    Log.w(TAG, "[AUDIO] EOS wait timeout reached (${maxWaitMs}ms)")
+                    break
+                }
+                delay(20)
+            }
+
+            val t6 = System.currentTimeMillis()
+            val t7 = t6
+            if (t5 == 0L) t5 = t4.takeIf { it > 0L } ?: t6
+            if (t4 == 0L) t4 = t5
+
+            val firstAudibleLatencyMs = t5 - t0
+            val firstAudioGenMs = t4 - t0
+            val totalSynthesisMs = t6 - t0
+            val totalLatencyMs = t7 - t0
+
+            Log.i(
+                BENCH_TAG,
+                "[TTS_BENCH] T0_RECEIVED=$t0 T1_REQUESTED=$t1 T2_MODEL_READY=$t2 T3_SYNTHESIS_START=$t3 T4_FIRST_AUDIO=$t4 T5_PLAYBACK_START=$t5 T6_SYNTHESIS_END=$t6 T7_PLAYBACK_END=$t7 FIRST_AUDIBLE_LATENCY_MS=$firstAudibleLatencyMs FIRST_AUDIO_GEN_MS=$firstAudioGenMs TOTAL_SYNTHESIS_MS=$totalSynthesisMs TOTAL_LATENCY_MS=$totalLatencyMs"
+            )
+            Log.d(
+                TAG,
+                "[AUDIO] STREAM_COMPLETED totalChunks=$totalChunks totalGeneratedSamples=$totalWrittenSamples totalWrittenSamples=$totalWrittenSamples currentPlaybackHead=${activeTrack.playbackHeadPosition.toLong() and 0xFFFFFFFFL} AudioTrackState=${activeTrack.state} AudioTrackPlayState=${activeTrack.playState} streamActiveState=$isTtsStreamActive"
+            )
+
+        } catch (e: Exception) {
+            Log.e(TAG, "playTtsQueue error", e)
+        } finally {
+            synchronized(lock) {
+                isTtsStreamActive = false
+                isPlaying = false
+            }
+        }
+    }
+
+    private fun writePcmToTrack(track: AudioTrack, pcmData: FloatArray): Int {
+        val useFloat = isFloatEncoding
+        return try {
+            if (useFloat) {
+                track.write(pcmData, 0, pcmData.size, AudioTrack.WRITE_BLOCKING)
+            } else {
+                val shortData = ShortArray(pcmData.size)
+                for (i in pcmData.indices) {
+                    val s = pcmData[i]
+                    val clamped = if (s > 1.0f) 1.0f else if (s < -1.0f) -1.0f else s
+                    shortData[i] = (clamped * 32767.0f).toInt().toShort()
+                }
+                track.write(shortData, 0, shortData.size, AudioTrack.WRITE_BLOCKING)
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "writePcmToTrack failed", e)
+            0
         }
     }
 
