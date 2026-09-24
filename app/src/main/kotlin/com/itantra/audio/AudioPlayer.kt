@@ -97,6 +97,7 @@ class AudioPlayer {
      */
     fun writeTtsChunk(
         pcmData: FloatArray,
+        chunkNumber: Int = 1,
         onFirstAudioPlayed: ((t5: Long) -> Unit)? = null
     ): Int {
         if (pcmData.isEmpty()) return 0
@@ -124,20 +125,21 @@ class AudioPlayer {
             if (written > 0) {
                 synchronized(lock) {
                     ttsTotalFramesWritten += written
-                    if (!ttsPlaybackStartedReported) {
-                        try {
-                            if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
-                                track.play()
-                            }
-                            ttsPlaybackStartedReported = true
-                            val t5 = System.currentTimeMillis()
-                            Log.d(TAG, "[AUDIO] T5_PLAYBACK_STARTED at $t5")
-                            onFirstAudioPlayed?.invoke(t5)
-                        } catch (e: Throwable) {
-                            Log.e(TAG, "AudioTrack.play() failed on progressive start", e)
+                    try {
+                        if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+                            track.play()
                         }
+                    } catch (e: Throwable) {
+                        Log.e(TAG, "AudioTrack.play() failed during chunk write", e)
+                    }
+                    if (!ttsPlaybackStartedReported) {
+                        ttsPlaybackStartedReported = true
+                        val t5 = System.currentTimeMillis()
+                        Log.d(TAG, "[AUDIO] T5_PLAYBACK_STARTED at $t5")
+                        onFirstAudioPlayed?.invoke(t5)
                     }
                 }
+                Log.d(TAG, "[AUDIO] CHUNK $chunkNumber WRITTEN ($written samples)")
             }
             return written
         } catch (e: Throwable) {
@@ -161,10 +163,17 @@ class AudioPlayer {
         val startTime = System.currentTimeMillis()
         val maxWaitMs = if (sampleRate > 0) (ttsTotalFramesWritten * 1000L / sampleRate) + 2000L else 5000L
         try {
-            while (isPlaying && isTtsStreamActive && track.playState == AudioTrack.PLAYSTATE_PLAYING) {
+            while (isPlaying && isTtsStreamActive) {
                 val currentHead = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
                 if (currentHead >= targetHead) {
                     break
+                }
+                if (track.playState != AudioTrack.PLAYSTATE_PLAYING && isPlaying && isTtsStreamActive) {
+                    try {
+                        track.play()
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "Failed to re-assert play() in awaitTtsCompletion: ${e.message}")
+                    }
                 }
                 if (System.currentTimeMillis() - startTime > maxWaitMs) {
                     Log.w(TAG, "awaitTtsCompletion timeout reached (${maxWaitMs}ms)")
@@ -172,13 +181,14 @@ class AudioPlayer {
                 }
                 delay(20)
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.e(TAG, "awaitTtsCompletion polling error", e)
         } finally {
             synchronized(lock) {
                 isTtsStreamActive = false
                 isPlaying = false
             }
+            Log.d(TAG, "[AUDIO] STREAM_COMPLETED")
         }
     }
 
