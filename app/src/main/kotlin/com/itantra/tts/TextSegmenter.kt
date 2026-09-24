@@ -79,10 +79,12 @@ object TextSegmenter {
         val segments = mutableListOf<String>()
         var remainingWords = words
 
-        // For the very first chunk, we target 3-5 words so T5 is under 250ms
+        // For the very first chunk, target ~8-12 words to provide a large initial buffer
+        // (e.g. ~3 seconds of audio). This slightly increases T5 latency (e.g. 100ms -> 400ms)
+        // but completely prevents stuttering/lagging on slow legacy CPUs that can't synthesize in real-time.
         var firstSplitIndex = -1
-        val searchMax = minOf(6, remainingWords.size - 1)
-        for (i in 2..searchMax) {
+        val searchMax = minOf(12, remainingWords.size - 1)
+        for (i in 6..searchMax) {
             val cleanWord = remainingWords[i].lowercase().replace(Regex("[^a-zA-Z\\u0900-\\u0D7F]"), "")
             if (CONJUNCTIONS.contains(cleanWord)) {
                 firstSplitIndex = i
@@ -91,18 +93,18 @@ object TextSegmenter {
         }
 
         if (firstSplitIndex == -1) {
-            // Default to 4 words for first chunk
-            firstSplitIndex = minOf(4, remainingWords.size)
+            // Default to 10 words for first chunk
+            firstSplitIndex = minOf(10, remainingWords.size)
         }
 
         segments.add(remainingWords.subList(0, firstSplitIndex).joinToString(" "))
         remainingWords = remainingWords.subList(firstSplitIndex, remainingWords.size)
 
-        // For remaining text, segment into ~6-8 word clauses
-        while (remainingWords.size > 8) {
+        // For remaining text, segment into larger clauses (10-15 words)
+        while (remainingWords.size > 12) {
             var nextSplit = -1
-            val nextSearchMax = minOf(8, remainingWords.size - 1)
-            for (i in 4..nextSearchMax) {
+            val nextSearchMax = minOf(14, remainingWords.size - 1)
+            for (i in 8..nextSearchMax) {
                 val cleanWord = remainingWords[i].lowercase().replace(Regex("[^a-zA-Z\\u0900-\\u0D7F]"), "")
                 if (CONJUNCTIONS.contains(cleanWord)) {
                     nextSplit = i
@@ -110,7 +112,7 @@ object TextSegmenter {
                 }
             }
             if (nextSplit == -1) {
-                nextSplit = minOf(7, remainingWords.size)
+                nextSplit = minOf(12, remainingWords.size)
             }
             segments.add(remainingWords.subList(0, nextSplit).joinToString(" "))
             remainingWords = remainingWords.subList(nextSplit, remainingWords.size)

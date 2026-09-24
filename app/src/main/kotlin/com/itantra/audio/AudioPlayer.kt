@@ -253,24 +253,14 @@ class AudioPlayer {
             .setContentType(if (isAlert) AudioAttributes.CONTENT_TYPE_SONIFICATION else AudioAttributes.CONTENT_TYPE_SPEECH)
             .build()
 
-        var encoding = AudioFormat.ENCODING_PCM_FLOAT
-        var isFloat = true
-        var minBuffer = 0
-
-        if (Build.VERSION.SDK_INT < 24) {
-            Log.w(TAG, "INIT: Forcing 16-bit PCM for API < 24 to avoid Float PCM hardware bugs")
-            encoding = AudioFormat.ENCODING_PCM_16BIT
-            isFloat = false
-            minBuffer = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        } else {
-            minBuffer = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
-        }
-
+        // ALWAYS use 16-bit PCM for 100% cross-device compatibility.
+        // Float PCM is notoriously glitchy on many Android OEM ROMs and provides zero benefit for voice.
+        val encoding = AudioFormat.ENCODING_PCM_16BIT
+        val isFloat = false
+        var minBuffer = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, encoding)
+        
         if (minBuffer <= 0) {
-            Log.w(TAG, "INIT: PCM buffer error ($minBuffer), forcing fallback to PCM_16BIT")
-            minBuffer = AudioTrack.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
-            encoding = AudioFormat.ENCODING_PCM_16BIT
-            isFloat = false
+            minBuffer = sampleRate * 2 // Fallback safe buffer
         }
 
         if (minBuffer <= 0) {
@@ -359,7 +349,7 @@ class AudioPlayer {
                 val minBuffer = AudioTrack.getMinBufferSize(
                     sampleRate,
                     AudioFormat.CHANNEL_OUT_MONO,
-                    AudioFormat.ENCODING_PCM_FLOAT
+                    AudioFormat.ENCODING_PCM_16BIT
                 )
                 if (minBuffer == AudioTrack.ERROR || minBuffer == AudioTrack.ERROR_BAD_VALUE) {
                     Log.e("CALL", "[CALL][RX][ERROR] Invalid buffer size for sampleRate=$sampleRate")
@@ -376,7 +366,7 @@ class AudioPlayer {
                     try {
                         val candidate = AudioTrack(
                             AudioAttributes.Builder().setUsage(usage).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build(),
-                            AudioFormat.Builder().setSampleRate(sampleRate).setEncoding(AudioFormat.ENCODING_PCM_FLOAT).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build(),
+                            AudioFormat.Builder().setSampleRate(sampleRate).setEncoding(AudioFormat.ENCODING_PCM_16BIT).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build(),
                             bufSize,
                             AudioTrack.MODE_STREAM,
                             AudioManager.AUDIO_SESSION_ID_GENERATE
@@ -489,16 +479,14 @@ class AudioPlayer {
                 val isUnderrun = totalWrittenSamples > 0 && currentHead >= targetHead
 
                 if (isUnderrun) {
-                    Log.w(TAG, "[AUDIO] Underrun detected (head=$currentHead, target=$targetHead). Resetting track.")
+                    Log.w(TAG, "[AUDIO] Underrun detected (head=$currentHead, target=$targetHead). Kicking track to resume cleanly.")
                     try {
                         activeTrack.pause()
-                        activeTrack.flush()
                     } catch (e: Throwable) {
-                        Log.e(TAG, "AudioTrack pause/flush failed", e)
+                        Log.e(TAG, "AudioTrack pause failed", e)
                     }
-                    // flush() resets the head position to 0 (or baseline)
-                    initialHead = (activeTrack.playbackHeadPosition.toLong() and 0xFFFFFFFFL)
-                    totalWrittenSamples = 0
+                    // Removed flush() because it destroys buffered audio and causes clicking on slow phones.
+                    // A simple pause() followed by play() cleanly kicks the hardware state machine out of underrun.
                 }
 
                 // CRITICAL FIX: Always assert PLAYING *before* a blocking write!
