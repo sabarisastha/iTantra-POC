@@ -91,20 +91,20 @@ class ModelManager(private val context: Context) {
                 // Download STT
                 val sttFile = downloader.modelFile("stt", lang, "model.int8.onnx")
                 val sttTokens = downloader.sharedFile("stt", "tokens.txt")
-                if (!sttFile.exists() || sttFile.length() == 0L) {
+                if (config.sttModelUrl.isNotBlank() && (!sttFile.exists() || sttFile.length() == 0L)) {
                     _sttState.value = ModelState.Downloading(0)
                     downloader.downloadSync(config.sttModelUrl, sttFile) { dl, total ->
                         if (total > 0) _sttState.value = ModelState.Downloading(((dl.toFloat() / total) * 100).toInt())
                     }
                 }
-                if (!sttTokens.exists() || sttTokens.length() == 0L) {
+                if (config.sttTokensUrl.isNotBlank() && (!sttTokens.exists() || sttTokens.length() == 0L)) {
                     downloader.downloadSync(config.sttTokensUrl, sttTokens)
                 }
                 _sttState.value = ModelState.Idle
 
                 // TTS model download is bypassed — Android system TTS is used instead.
                 _ttsState.value = ModelState.Idle
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.e(TAG, "preDownloadModels failed", e)
                 val err = "Download failed: ${e.message}"
                 _sttState.value = ModelState.Error(err)

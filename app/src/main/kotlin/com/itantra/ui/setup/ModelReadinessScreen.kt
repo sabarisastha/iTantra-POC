@@ -66,7 +66,7 @@ fun ModelReadinessScreen(
             if (sttState is ModelState.Downloading) {
                 Text("STT: ${(sttState as ModelState.Downloading).progress}%")
             } else if (sttState is ModelState.Error) {
-                Text("STT Error: ${(sttState as ModelState.Error).message}", color = MaterialTheme.colorScheme.error)
+                Text("STT: ${(sttState as ModelState.Error).message}", color = MaterialTheme.colorScheme.error)
             } else {
                 Text("STT: Ready")
             }
@@ -74,18 +74,23 @@ fun ModelReadinessScreen(
             if (ttsState is ModelState.Downloading) {
                 Text("TTS: ${(ttsState as ModelState.Downloading).progress}%")
             } else if (ttsState is ModelState.Error) {
-                Text("TTS Error: ${(ttsState as ModelState.Error).message}", color = MaterialTheme.colorScheme.error)
+                Text("TTS: ${(ttsState as ModelState.Error).message}", color = MaterialTheme.colorScheme.error)
             } else {
-                Text("TTS: Ready")
+                Text("TTS: System Audio Ready")
             }
             
             if (sttState is ModelState.Error || ttsState is ModelState.Error) {
-                Button(onClick = {
-                    coroutineScope.launch {
-                        modelManager.preDownloadModels(selectedLang.code)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = {
+                        coroutineScope.launch {
+                            modelManager.preDownloadModels(selectedLang.code)
+                        }
+                    }) {
+                        Text("Retry")
                     }
-                }) {
-                    Text("Retry")
+                    OutlinedButton(onClick = { onReady() }) {
+                        Text("Continue Offline")
+                    }
                 }
             }
         }
