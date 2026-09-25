@@ -50,6 +50,7 @@ android {
     }
 
     packagingOptions {
+        jniLibs.useLegacyPackaging = true
         jniLibs.pickFirsts.add("**/libonnxruntime.so")
         jniLibs.pickFirsts.add("**/libsherpa-onnx-core.so")
     }
