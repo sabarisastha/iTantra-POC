@@ -33,7 +33,7 @@
 
     <uses-feature
         android:name="android.hardware.wifi.direct"
-        android:required="true" />
+        android:required="false" />
 
     <!-- ======================================================================
          Audio capture (AudioRecord) — microphone for STT input
@@ -42,7 +42,7 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-feature
         android:name="android.hardware.microphone"
-        android:required="true" />
+        android:required="false" />
 
     <!-- ======================================================================
          Bluetooth Classic RFCOMM — primary offline transport. Wi-Fi Direct remains
@@ -71,7 +71,7 @@
         android:required="false" />
 
     <application
-        android:extractNativeLibs="false"
+        android:extractNativeLibs="true"
         android:name="com.itantra.iTantraApplication"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
