@@ -18,7 +18,7 @@ private const val TAG = "AndroidTtsEngine"
 
 /**
  * Android system native TextToSpeech engine wrapper.
- * Bypasses local Sherpa-ONNX / Indic-Parler TTS models and uses device built-in TTS.
+ * Guarantees immediate, audible playback across all devices and OEM ROMs.
  */
 class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
 
@@ -30,6 +30,7 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     @Volatile private var alertFocusRequest: AudioFocusRequest? = null
+    @Volatile private var normalFocusRequest: AudioFocusRequest? = null
 
     init {
         initTts()
@@ -42,6 +43,15 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
             if (status == TextToSpeech.SUCCESS) {
                 initialized = true
                 tts?.setOnUtteranceProgressListener(utteranceListener)
+                
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    val attrs = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                        .build()
+                    tts?.setAudioAttributes(attrs)
+                }
+
                 Log.d(TAG, "Android TextToSpeech successfully initialized")
                 
                 val toProcess: List<RecognizedSentence>
@@ -83,12 +93,20 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
             initTts()
             return
         }
-        val uid    = UUID.randomUUID().toString()
+
+        val uid = UUID.randomUUID().toString()
         val locale = localeFor(sentence.languageCode)
-        val result = tts?.setLanguage(locale)
+        var result = tts?.setLanguage(locale)
         if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-            Log.w(TAG, "Locale $locale not supported on this device — falling back to en")
-            tts?.setLanguage(Locale.ENGLISH)
+            Log.w(TAG, "Locale $locale not supported on this device — trying English fallback")
+            result = tts?.setLanguage(Locale.ENGLISH)
+            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                result = tts?.setLanguage(Locale.US)
+                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    Log.w(TAG, "Defaulting to device default locale: ${Locale.getDefault()}")
+                    tts?.setLanguage(Locale.getDefault())
+                }
+            }
         }
 
         if (sentence.isAlert) {
@@ -100,8 +118,9 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
 
     /** Stops current audio playback on disconnect without destroying TextToSpeech engine */
     fun stop() {
-        Log.d(TAG, "stop() called — stopping speech playback and releasing alert focus")
+        Log.d(TAG, "stop() called — stopping speech playback and releasing focus")
         releaseAlertFocus()
+        releaseNormalFocus()
         runCatching { tts?.stop() }
         synchronized(pendingUtterances) {
             pendingUtterances.clear()
@@ -118,10 +137,15 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
 
     private fun speakNormal(text: String, uid: String) {
         Log.d(TAG, "speakNormal: '$text' (uid=$uid)")
+        requestNormalFocus()
+        ensureStreamMusicAudible()
+
         val params = Bundle().apply {
             putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
         }
-        tts?.speak(text, TextToSpeech.QUEUE_ADD, params, uid)
+        // Use QUEUE_FLUSH to immediately interrupt and play incoming PTT speech without queue stalling
+        val res = tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, uid)
+        Log.d(TAG, "tts.speak (normal) returned: $res")
     }
 
     private fun speakAlert(text: String, uid: String) {
@@ -139,7 +163,55 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
         val params = Bundle().apply {
             putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, stream)
         }
-        tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, uid)
+        val res = tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, uid)
+        Log.d(TAG, "tts.speak (alert) returned: $res")
+    }
+
+    private fun ensureStreamMusicAudible() {
+        try {
+            val stream = AudioManager.STREAM_MUSIC
+            val currentVol = audioManager.getStreamVolume(stream)
+            val maxVol = audioManager.getStreamMaxVolume(stream)
+            if (currentVol == 0) {
+                val targetVol = maxOf(1, (maxVol * 0.75f).toInt())
+                audioManager.setStreamVolume(stream, targetVol, 0)
+                Log.i(TAG, "STREAM_MUSIC volume was muted (0); boosted to $targetVol/$maxVol for PTT speech")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to check/adjust STREAM_MUSIC volume: ${e.message}")
+        }
+    }
+
+    private fun requestNormalFocus() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                .setAudioAttributes(attrs)
+                .setOnAudioFocusChangeListener { /* hold focus */ }
+                .build()
+            audioManager.requestAudioFocus(req)
+            normalFocusRequest = req
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.requestAudioFocus(
+                null,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT,
+            )
+        }
+    }
+
+    private fun releaseNormalFocus() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            normalFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+            normalFocusRequest = null
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.abandonAudioFocus(null)
+        }
     }
 
     private fun requestAlertFocus() {
@@ -183,6 +255,7 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
             Log.d(TAG, "TTS utterance completed: uid=$uid")
             restoreVolume(uid)
             releaseAlertFocus()
+            releaseNormalFocus()
         }
         
         @Deprecated("Deprecated in Java")
@@ -190,12 +263,14 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
             Log.e(TAG, "TTS utterance error: uid=$uid")
             restoreVolume(uid)
             releaseAlertFocus()
+            releaseNormalFocus()
         }
         
         override fun onError(uid: String?, errorCode: Int) {
             Log.e(TAG, "TTS utterance error on $uid, code=$errorCode")
             restoreVolume(uid)
             releaseAlertFocus()
+            releaseNormalFocus()
         }
         
         private fun restoreVolume(uid: String?) {
