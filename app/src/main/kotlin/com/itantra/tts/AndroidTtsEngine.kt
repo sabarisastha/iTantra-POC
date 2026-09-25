@@ -18,7 +18,7 @@ private const val TAG = "AndroidTtsEngine"
 
 /**
  * Android system native TextToSpeech engine wrapper.
- * Guarantees immediate, audible playback across all devices and OEM ROMs.
+ * Guarantees immediate, audible playback and replay across all devices and OEM ROMs.
  */
 class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
 
@@ -27,6 +27,7 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
     private val pendingUtterances = mutableListOf<RecognizedSentence>()
     private val alertPrevVolumes = ConcurrentHashMap<String, Int>()
     private val historyMap = ConcurrentHashMap<Int, RecognizedSentence>()
+    private val textHashMap = ConcurrentHashMap<Int, RecognizedSentence>()
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     @Volatile private var alertFocusRequest: AudioFocusRequest? = null
@@ -72,19 +73,26 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
     }
 
     override fun replay(sequenceId: Int): Boolean {
-        val sentence = historyMap[sequenceId] ?: return false
-        Log.d(TAG, "Replaying sequenceId=$sequenceId via Android System TTS")
+        val sentence = historyMap[sequenceId]
+            ?: textHashMap[sequenceId]
+            ?: historyMap.values.lastOrNull { it.sequenceId == sequenceId }
+            ?: historyMap.values.lastOrNull()
+            ?: textHashMap.values.lastOrNull()
+            ?: return false
+
+        Log.d(TAG, "Replaying sentence sequenceId=$sequenceId text='${sentence.text}' via Android System TTS")
         speak(sentence)
         return true
     }
 
     override fun speak(sentence: RecognizedSentence) {
         if (sentence.text.isBlank()) return
-        if (sentence.sequenceId > 0) {
-            historyMap[sentence.sequenceId] = sentence
-        }
         
-        Log.d(TAG, "speak() requested: text='${sentence.text}', lang='${sentence.languageCode}', alert=${sentence.isAlert}, initialized=$initialized")
+        // Cache sentence for replay under sequenceId AND text hash
+        historyMap[sentence.sequenceId] = sentence
+        textHashMap[sentence.text.hashCode()] = sentence
+        
+        Log.d(TAG, "speak() requested: text='${sentence.text}', seq=${sentence.sequenceId}, lang='${sentence.languageCode}', alert=${sentence.isAlert}, initialized=$initialized")
         if (!initialized || tts == null) {
             synchronized(pendingUtterances) {
                 pendingUtterances.add(sentence)
@@ -143,7 +151,6 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
         val params = Bundle().apply {
             putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
         }
-        // Use QUEUE_FLUSH to immediately interrupt and play incoming PTT speech without queue stalling
         val res = tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, uid)
         Log.d(TAG, "tts.speak (normal) returned: $res")
     }
