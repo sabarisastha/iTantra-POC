@@ -102,21 +102,8 @@ class ModelManager(private val context: Context) {
                 }
                 _sttState.value = ModelState.Idle
 
-                // Download TTS
-                if (config.ttsModelUrl != null) {
-                    val ttsFile = if (config.ttsSharedModelId != null) downloader.sharedModelFile(config.ttsSharedModelId, "model.onnx") else downloader.modelFile("tts", lang, "model.onnx")
-                    val ttsTokens = if (config.ttsSharedModelId != null) downloader.sharedModelFile(config.ttsSharedModelId, "tokens.txt") else downloader.modelFile("tts", lang, "tokens.txt")
-                    if (!ttsFile.exists() || ttsFile.length() == 0L) {
-                        _ttsState.value = ModelState.Downloading(0)
-                        downloader.downloadSync(config.ttsModelUrl, ttsFile) { dl, total ->
-                            if (total > 0) _ttsState.value = ModelState.Downloading(((dl.toFloat() / total) * 100).toInt())
-                        }
-                    }
-                    if (config.ttsTokensUrl != null && (!ttsTokens.exists() || ttsTokens.length() == 0L)) {
-                        downloader.downloadSync(config.ttsTokensUrl, ttsTokens)
-                    }
-                    _ttsState.value = ModelState.Idle
-                }
+                // TTS model download is bypassed — Android system TTS is used instead.
+                _ttsState.value = ModelState.Idle
             } catch (e: Exception) {
                 Log.e(TAG, "preDownloadModels failed", e)
                 val err = "Download failed: ${e.message}"
@@ -128,17 +115,11 @@ class ModelManager(private val context: Context) {
 
     fun isModelDownloaded(lang: String): Boolean {
         val config = getLanguageConfig(lang) ?: return false
+        if (config.sttModelUrl.isBlank()) return true
         val sttFile = downloader.modelFile("stt", lang, "model.int8.onnx")
         val sttTokens = downloader.sharedFile("stt", "tokens.txt")
         if (!sttFile.exists() || sttFile.length() == 0L) return false
         if (!sttTokens.exists() || sttTokens.length() == 0L) return false
-
-        if (config.ttsModelUrl != null) {
-            val ttsFile = if (config.ttsSharedModelId != null) downloader.sharedModelFile(config.ttsSharedModelId, "model.onnx") else downloader.modelFile("tts", lang, "model.onnx")
-            val ttsTokens = if (config.ttsSharedModelId != null) downloader.sharedModelFile(config.ttsSharedModelId, "tokens.txt") else downloader.modelFile("tts", lang, "tokens.txt")
-            if (!ttsFile.exists() || ttsFile.length() == 0L) return false
-            if (config.ttsTokensUrl != null && (!ttsTokens.exists() || ttsTokens.length() == 0L)) return false
-        }
         return true
     }
 
