@@ -303,13 +303,8 @@ class SessionController(
 
             val recorder = com.itantra.audio.AudioRecorder()
             phoneAudioRecorder = recorder
-            val started = recorder.startRecording { floatChunk ->
+            recorder.startRecording { floatChunk ->
                 channel.trySend(floatChunk)
-            }
-            if (!started) {
-                Log.e("CALL", "[CALL][TX][ERROR] Failed to initialize AudioRecorder for phone TX")
-                phoneAudioRecorder = null
-                return@launch
             }
 
             for (chunk in channel) {
