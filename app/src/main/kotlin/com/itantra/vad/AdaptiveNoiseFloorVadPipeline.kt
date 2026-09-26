@@ -101,12 +101,19 @@ class AdaptiveNoiseFloorVadPipeline(
         totalFrames++
         val vadResult = vadEngine.processFrame(frame)
 
-        if (totalFrames % 25L == 0L) {
-            Log.d(TAG, "Frame $totalFrames | prob=${vadResult.speechProbability.fmt()} | isSpeech=${vadResult.isSpeech} | bufSize=${speechBuffer.size} | emaRms=${emaRms.fmt()}")
+        var sum = 0.0
+        for (s in frame) sum += s * s
+        val rawRms = kotlin.math.sqrt(sum / frame.size)
+
+        if (totalFrames % 100L == 0L) {
+            Log.d(TAG, "Frame $totalFrames | rawRms=${"%.2f".format(rawRms)} | isSpeech=${vadResult.isSpeech} | prob=${vadResult.speechProbability.fmt()} | bufSize=${speechBuffer.size} | fallback=${SileroVadEngine.isOrtUnavailable}")
+        }
+        if (rawRms == 0.0 && totalFrames % 100L == 0L) {
+            Log.e(TAG, "CRITICAL: AudioRecord delivering completely silent 0-filled buffers!")
         }
 
-        // Buffer frame if speech is detected OR if fallback mode is active (to prevent buffer starvation)
-        if (vadResult.isSpeech || SileroVadEngine.isOrtUnavailable) {
+        // Buffer frame if speech is detected OR if audio has energy (rawRms > 60.0) OR fallback mode is active
+        if (vadResult.isSpeech || rawRms > 60.0 || SileroVadEngine.isOrtUnavailable) {
             accumulateFrame(frame)
         }
 
@@ -119,14 +126,13 @@ class AdaptiveNoiseFloorVadPipeline(
             }
             SegmenterEvent.SPEECH_START -> {
                 Log.d(TAG, "SPEECH_START — threshold=${adaptedThreshold.fmt()} emaRms=${emaRms.fmt()}")
-                // In normal Silero mode, SPEECH_START clears pre-trigger and ensures frame is in buffer
-                if (!SileroVadEngine.isOrtUnavailable && !vadResult.isSpeech) {
+                if (!SileroVadEngine.isOrtUnavailable && !vadResult.isSpeech && rawRms <= 60.0) {
                     accumulateFrame(frame)
                 }
                 null
             }
             SegmenterEvent.SPEECH_CONTINUING -> {
-                if (!SileroVadEngine.isOrtUnavailable && !vadResult.isSpeech) {
+                if (!SileroVadEngine.isOrtUnavailable && !vadResult.isSpeech && rawRms <= 60.0) {
                     accumulateFrame(frame)
                 }
                 // Force-flush if the segment is unreasonably long
@@ -162,24 +168,27 @@ class AdaptiveNoiseFloorVadPipeline(
 
     /**
      * Drain and return any accumulated speech segment sitting in [speechBuffer] upon PTT release.
-     * Enforces a minimum sample threshold (800 samples ~50ms) to ignore clicks/pops while preserving short utterances.
+     * Enforces a minimum sample threshold (400 samples ~25ms) to ignore clicks/pops while preserving short utterances.
      */
     fun flush(): FloatArray? {
-        Log.d(TAG, "flush() called. speechBuffer size: ${speechBuffer.size}")
-        if (speechBuffer.isEmpty()) return null
-        val totalSamples = speechBuffer.size
-        if (totalSamples < 800) {
-            Log.w(TAG, "flush() dropped: only $totalSamples samples (< 800)")
+        Log.d(TAG, "flush() requested. Current speechBuffer.size = ${speechBuffer.size}")
+        if (speechBuffer.isEmpty()) {
+            Log.w(TAG, "flush() failed: speechBuffer is completely empty")
+            return null
+        }
+        val total = speechBuffer.size
+        if (total < 400) {
+            Log.w(TAG, "flush() dropped: only $total samples (< 400)")
             speechBuffer.clear()
             return null
         }
-        val floatSegment = FloatArray(totalSamples)
-        for (i in 0 until totalSamples) {
-            floatSegment[i] = speechBuffer[i] / 32768.0f
+        val out = FloatArray(total)
+        for (i in 0 until total) {
+            out[i] = speechBuffer[i] / 32768.0f
         }
         speechBuffer.clear()
-        Log.d(TAG, "flush() emitted ${floatSegment.size} float samples")
-        return floatSegment
+        Log.d(TAG, "flush() successfully emitted ${out.size} float samples")
+        return out
     }
 
     /**

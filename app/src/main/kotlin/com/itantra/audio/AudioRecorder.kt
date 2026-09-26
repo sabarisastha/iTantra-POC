@@ -67,24 +67,45 @@ class AudioRecorder {
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING)
         val bufSize = maxOf(minBuf, 4096)
 
-        audioRecord = AudioRecord(
-            audioSource,
+        var recordSource = audioSource
+        var recorder = AudioRecord(
+            recordSource,
             SAMPLE_RATE,
             CHANNEL,
             ENCODING,
             bufSize
         )
 
-        if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "INIT: AudioRecord failed to initialize")
-            audioRecord?.release()
-            audioRecord = null
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e(TAG, "INIT: AudioRecord failed to initialize with source $recordSource")
+            recorder.release()
+            if (recordSource != MediaRecorder.AudioSource.MIC) {
+                Log.w(TAG, "Retrying AudioRecord initialization with MediaRecorder.AudioSource.MIC fallback")
+                recordSource = MediaRecorder.AudioSource.MIC
+                recorder = AudioRecord(
+                    recordSource,
+                    SAMPLE_RATE,
+                    CHANNEL,
+                    ENCODING,
+                    bufSize
+                )
+            }
+        }
+
+        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e(TAG, "INIT: AudioRecord failed to initialize with fallback source $recordSource")
+            recorder.release()
             return
         }
 
-        Log.i(TAG, "START: AudioRecord started")
+        audioRecord = recorder
+        Log.i(TAG, "START: AudioRecord initialized successfully with source $recordSource")
         audioRecord?.startRecording()
         recording = true
+
+        if (audioRecord?.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+            Log.w(TAG, "WARNING: AudioRecord state is not RECORDSTATE_RECORDING: ${audioRecord?.recordingState}")
+        }
 
         recordJob = scope.launch {
             val shortBuf = ShortArray(bufSize / 2)

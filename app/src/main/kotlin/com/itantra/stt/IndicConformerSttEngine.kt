@@ -172,17 +172,17 @@ class IndicConformerSttEngine(
         audioRecorder?.stopRecording()
         audioRecorder = null
 
-        // Flush trailing audio segment sitting in buffer upon PTT release
         val remainingSegment = vadPipeline?.flush()
-
         vadPipeline?.close()
         vadPipeline = null
 
         if (remainingSegment != null && remainingSegment.isNotEmpty()) {
-            Log.d(TAG, "[ITAN-STT] PTT release flush — processing remaining segment: ${remainingSegment.size} samples (${remainingSegment.size / 16000f}s)")
-            scope.launch {
+            Log.d(TAG, "[ITAN-STT] PTT release flush — processing ${remainingSegment.size} samples (${remainingSegment.size / 16000f}s)")
+            scope.launch(Dispatchers.Default) {
                 processSpeechSegment(remainingSegment)
             }
+        } else {
+            Log.w(TAG, "[ITAN-STT] PTT release flush returned NULL or empty segment")
         }
     }
 
