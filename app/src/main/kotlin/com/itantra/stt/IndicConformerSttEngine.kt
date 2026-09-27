@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.abs
 
 private const val TAG = "ITAN-STT"
 
@@ -196,6 +197,23 @@ class IndicConformerSttEngine(
     private suspend fun processSpeechSegment(audioData: FloatArray) {
         if (audioData.isEmpty() || isShutdown) return
 
+        // Compute peak amplitude
+        var maxAbs = 0f
+        for (s in audioData) {
+            val a = abs(s)
+            if (a > maxAbs) maxAbs = a
+        }
+        Log.d(TAG, "Speech segment audio peak amplitude: $maxAbs (samples: ${audioData.size})")
+
+        // Peak normalization if the recording is faint (maxAbs < 0.25f and not dead silent)
+        val samplesToProcess = if (maxAbs in 0.001f..0.25f) {
+            val gain = (0.7f / maxAbs).coerceAtMost(10.0f)
+            Log.d(TAG, "Applying digital normalization gain: x$gain")
+            FloatArray(audioData.size) { (audioData[it] * gain).coerceIn(-1.0f, 1.0f) }
+        } else {
+            audioData
+        }
+
         val lang = modelManager.currentSttLang ?: "hi"
         var recognizer = modelManager.getSttRecognizer()
 
@@ -212,9 +230,9 @@ class IndicConformerSttEngine(
             if (acquiredRecognizer != null) {
                 try {
                     val startMs = System.currentTimeMillis()
-                    Log.d(TAG, "Running Sherpa-ONNX STT on ${audioData.size} samples (${audioData.size / 16000f}s)")
+                    Log.d(TAG, "Running Sherpa-ONNX STT on ${samplesToProcess.size} samples (${samplesToProcess.size / 16000f}s)")
                     val stream = acquiredRecognizer.createStream()
-                    stream.acceptWaveform(audioData, sampleRate = AudioRecorder.SAMPLE_RATE)
+                    stream.acceptWaveform(samplesToProcess, sampleRate = AudioRecorder.SAMPLE_RATE)
                     acquiredRecognizer.decode(stream)
                     val result = acquiredRecognizer.getResult(stream)
                     stream.release()

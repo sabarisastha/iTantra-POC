@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlin.math.sqrt
 
 class AudioRecorder {
 
@@ -26,7 +27,7 @@ class AudioRecorder {
 
     @SuppressLint("MissingPermission")
     fun startRecording(
-        audioSource: Int = MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+        audioSource: Int = MediaRecorder.AudioSource.MIC,
         onChunk: (FloatArray) -> Unit
     ) {
         startRecordingInternal(audioSource) { shortBuf, read ->
@@ -46,7 +47,7 @@ class AudioRecorder {
      */
     @SuppressLint("MissingPermission")
     fun startRecordingShorts(
-        audioSource: Int = MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+        audioSource: Int = MediaRecorder.AudioSource.MIC,
         onChunk: (ShortArray) -> Unit
     ) {
         startRecordingInternal(audioSource) { shortBuf, read ->
@@ -56,7 +57,7 @@ class AudioRecorder {
 
     @SuppressLint("MissingPermission")
     private fun startRecordingInternal(
-        audioSource: Int = MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+        audioSource: Int = MediaRecorder.AudioSource.MIC,
         onRawChunk: (ShortArray, Int) -> Unit
     ) {
         if (recording) {
@@ -112,7 +113,23 @@ class AudioRecorder {
             while (recording) {
                 val read = audioRecord?.read(shortBuf, 0, shortBuf.size) ?: break
                 if (read > 0) {
-                    Log.v(TAG, "READ: read $read samples")
+                    var sumSq = 0.0
+                    for (i in 0 until read) {
+                        val s = shortBuf[i].toDouble()
+                        sumSq += s * s
+                    }
+                    val rms = sqrt(sumSq / read)
+
+                    // If chunk RMS is faint (e.g. low hardware gain), apply soft auto-gain
+                    if (rms in 0.1..300.0) {
+                        val gain = 4.0f
+                        for (i in 0 until read) {
+                            val scaled = (shortBuf[i] * gain).toInt()
+                            shortBuf[i] = scaled.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                        }
+                    }
+
+                    Log.v(TAG, "READ: read $read samples (rawRms=%.2f)".format(rms))
                     onRawChunk(shortBuf, read)
                 }
             }
