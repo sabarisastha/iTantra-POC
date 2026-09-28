@@ -37,12 +37,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.itantra.audio.DutyCycleInfo
 import com.itantra.session.Direction
 import com.itantra.session.FloorState
 import com.itantra.session.SessionController
 import com.itantra.session.SessionMode
 import com.itantra.session.SupportedLanguage
 import com.itantra.session.TranscriptEntry
+import com.itantra.telemetry.TelemetryState
 import com.itantra.transport.ConnectionState
 import java.text.SimpleDateFormat
 import java.util.*
@@ -63,8 +65,12 @@ fun SessionScreen(
     val language        by vm.selectedLanguage.collectAsStateWithLifecycle()
     val connectionState by vm.connectionState.collectAsStateWithLifecycle()
     val micError        by vm.micError.collectAsStateWithLifecycle()
+    val telemetry       by vm.telemetry.collectAsStateWithLifecycle()
+    val dutyCycleInfo   by vm.dutyCycleInfo.collectAsStateWithLifecycle()
+    val liveLocation    by vm.liveLocationState.collectAsStateWithLifecycle()
 
     var latencyExpanded by remember { mutableStateOf(false) }
+    var isLocatingForAlert by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -135,108 +141,146 @@ fun SessionScreen(
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { 
-                    val hasPerm = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
-                                  ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                    if (hasPerm) {
-                        val loc = LocationHelper.getLastKnownLocation(context)
-                        vm.triggerAlert(loc?.latitude, loc?.longitude)
-                    } else {
-                        vm.triggerAlert(null, null)
+                    if (isLocatingForAlert) return@ExtendedFloatingActionButton
+                    isLocatingForAlert = true
+                    coroutineScope.launch {
+                        try {
+                            val result = LocationHelper.getCurrentLocation(context, timeoutMs = 2500L)
+                            val loc = result.locationInfo
+                            val statusStr = if (loc != null) "Location available" else result.status.label
+                            vm.triggerAlert(
+                                latitude = loc?.latitude,
+                                longitude = loc?.longitude,
+                                accuracy = loc?.accuracyMeters,
+                                locationTimestampMs = loc?.timestampMs,
+                                locationStatus = statusStr
+                            )
+                        } finally {
+                            isLocatingForAlert = false
+                        }
                     }
                 },
-                icon             = { Icon(Icons.Default.Warning, contentDescription = null) },
-                text             = { Text("Send Alert") },
+                icon             = { 
+                    if (isLocatingForAlert) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    } else {
+                        Icon(Icons.Default.Warning, contentDescription = null)
+                    }
+                },
+                text             = { Text(if (isLocatingForAlert) "Locating & Sending..." else "Send Alert") },
                 containerColor   = MaterialTheme.colorScheme.errorContainer,
                 contentColor     = MaterialTheme.colorScheme.onErrorContainer,
             )
         },
     ) { padding ->
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Spacer(Modifier.height(4.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Spacer(Modifier.height(4.dp))
 
-            // ── Synchronized PTT / Phone mode toggle ─────────────────────────
-            ModeToggleRow(mode = mode, onModeChange = { vm.setMode(it) })
+                // ── Synchronized PTT / Phone mode toggle ─────────────────────────
+                ModeToggleRow(mode = mode, onModeChange = { vm.setMode(it) })
 
-            // ── Half-Duplex Floor Status Banner ──────────────────────────────
-            FloorStatusBanner(mode = mode, floorState = floorState)
+                // ── Half-Duplex Floor Status Banner ──────────────────────────────
+                FloorStatusBanner(mode = mode, floorState = floorState, dutyCycleInfo = dutyCycleInfo)
 
-            // ── Microphone Error Banner ──────────────────────────────────────
-            AnimatedVisibility(visible = micError != null) {
-                micError?.let { errText ->
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                // ── Microphone Error Banner ──────────────────────────────────────
+                AnimatedVisibility(visible = micError != null) {
+                    micError?.let { errText ->
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
                         ) {
-                            Icon(
-                                Icons.Default.MicOff,
-                                contentDescription = "Microphone Error",
-                                tint = MaterialTheme.colorScheme.onErrorContainer,
-                            )
-                            Text(
-                                text = errText,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                modifier = Modifier.weight(1f),
-                            )
-                            IconButton(onClick = { vm.clearMicError() }) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
                                 Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "Dismiss Error",
+                                    Icons.Default.MicOff,
+                                    contentDescription = "Microphone Error",
                                     tint = MaterialTheme.colorScheme.onErrorContainer,
                                 )
+                                Text(
+                                    text = errText,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                IconButton(onClick = { vm.clearMicError() }) {
+                                    Icon(
+                                        Icons.Default.Close,
+                                        contentDescription = "Dismiss Error",
+                                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                                    )
+                                }
                             }
                         }
                     }
                 }
-            }
 
-            // ── Walkie-Talkie PTT Button (only in PTT mode) ───────────────────
-            AnimatedVisibility(visible = mode == SessionMode.PTT) {
-                WalkieTalkiePttButton(
-                    floorState = floorState,
-                    onArm = {
-                        Log.d(TAG, "UI: PTT Press -> requestFloorAndArm()")
-                        vm.requestFloorAndArm()
-                    },
-                    onDisarm = {
-                        Log.d(TAG, "UI: PTT Release -> releaseFloorAndDisarm()")
-                        vm.releaseFloorAndDisarm()
+                // ── Live Peer Distance & Movement Banner ─────────────────────────
+                AnimatedVisibility(visible = liveLocation.hasPeerLocation) {
+                    LivePeerDistanceBanner(liveLocation = liveLocation)
+                }
+
+                // ── Walkie-Talkie PTT Button (only in PTT mode) ───────────────────
+                AnimatedVisibility(visible = mode == SessionMode.PTT) {
+                    WalkieTalkiePttButton(
+                        floorState = floorState,
+                        onArm = {
+                            Log.d(TAG, "UI: PTT Press -> requestFloorAndArm()")
+                            vm.requestFloorAndArm()
+                        },
+                        onDisarm = {
+                            Log.d(TAG, "UI: PTT Release -> releaseFloorAndDisarm()")
+                            vm.releaseFloorAndDisarm()
+                        },
+                    )
+                }
+
+                // ── Latency debug overlay ────────────────────────────────────────
+                LatencyPanel(entries = entries, expanded = latencyExpanded, onToggle = { latencyExpanded = !latencyExpanded })
+
+                // ── Transcript log ───────────────────────────────────────────────
+                Text("Transcript", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                TranscriptLog(
+                    entries = entries,
+                    modifier = Modifier.weight(1f),
+                    onReplay = { sequenceId ->
+                        val replayed = vm.replayReceivedAudio(sequenceId)
+                        if (!replayed) {
+                            coroutineScope.launch {
+                                snackbarHostState.showSnackbar("Voice replay is no longer available")
+                            }
+                        }
+                        replayed
                     },
                 )
             }
 
-            // ── Latency debug overlay ────────────────────────────────────────
-            LatencyPanel(entries = entries, expanded = latencyExpanded, onToggle = { latencyExpanded = !latencyExpanded })
-
-            // ── Transcript log ───────────────────────────────────────────────
-            Text("Transcript", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-            TranscriptLog(
-                entries = entries,
-                modifier = Modifier.weight(1f),
-                onReplay = { sequenceId ->
-                    val replayed = vm.replayReceivedAudio(sequenceId)
-                    if (!replayed) {
-                        coroutineScope.launch {
-                            snackbarHostState.showSnackbar("Voice replay is no longer available")
-                        }
-                    }
-                    replayed
-                },
+            // ── Live Telemetry Overlay (top-end via Box + Alignment.TopEnd) ────
+            TelemetryOverlay(
+                telemetry = telemetry,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 56.dp, end = 12.dp)
             )
         }
     }
@@ -333,29 +377,43 @@ private fun ModeSegmentButton(
 // Floor Status Banner
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun FloorStatusBanner(mode: SessionMode, floorState: FloorState) {
+private fun FloorStatusBanner(
+    mode: SessionMode,
+    floorState: FloorState,
+    dutyCycleInfo: DutyCycleInfo,
+) {
     if (mode == SessionMode.PHONE) {
         Card(
             shape = RoundedCornerShape(14.dp),
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)),
         ) {
-            Row(
+            Column(
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                Icon(
-                    Icons.Default.PhoneInTalk,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.size(18.dp),
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        Icons.Default.PhoneInTalk,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.secondary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        "Phone Mode: Continuous capture active with Silero VAD",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                }
                 Text(
-                    "Phone Mode: Continuous capture active with Silero VAD",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    text = "Duty Cycle: ${dutyCycleInfo.tier.label} (${dutyCycleInfo.tier.intervalMs}ms) | Battery: ${dutyCycleInfo.batteryPercent}%${if (dutyCycleInfo.isPipelineActive) " [ACTIVE]" else " [IDLE]"}",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
                 )
             }
         }
@@ -521,6 +579,96 @@ private fun WalkieTalkiePttButton(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Live Peer Distance Banner
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun LivePeerDistanceBanner(
+    liveLocation: com.itantra.utils.LiveLocationState,
+) {
+    val context = LocalContext.current
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Navigation,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        text = "Live Peer Distance: ${LocationHelper.formatDistance(liveLocation.distanceMeters)}",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (liveLocation.peerLocation != null) {
+                    IconButton(
+                        onClick = {
+                            LocationHelper.openMap(
+                                context,
+                                liveLocation.peerLocation.latitude,
+                                liveLocation.peerLocation.longitude,
+                                "Peer Live Location"
+                            )
+                        },
+                        modifier = Modifier.size(28.dp),
+                    ) {
+                        Icon(
+                            Icons.Default.Map,
+                            contentDescription = "Open Map",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "Peer: ${liveLocation.peerMovementState.label} • Me: ${liveLocation.localMovementState.label}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                )
+                if (liveLocation.lastPeerUpdateMs > 0L) {
+                    Text(
+                        text = LocationHelper.formatLocationAge(liveLocation.lastPeerUpdateMs),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+            }
+            if (liveLocation.relativeDirection != com.itantra.utils.RelativeDirection.UNAVAILABLE) {
+                Text(
+                    text = "Relative Heading: ${liveLocation.relativeDirection.label}",
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Transcript log
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
@@ -567,7 +715,7 @@ private fun TranscriptBubble(entry: TranscriptEntry, timeFmt: SimpleDateFormat, 
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (sent) Arrangement.End else Arrangement.Start,
     ) {
-        Surface(shape = RoundedCornerShape(12.dp), color = bg, modifier = Modifier.widthIn(max = 310.dp)) {
+        Surface(shape = RoundedCornerShape(12.dp), color = bg, modifier = Modifier.widthIn(max = 330.dp)) {
             Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (entry.isAlert) Icon(Icons.Default.Warning, null, tint = fg, modifier = Modifier.size(14.dp))
@@ -579,27 +727,83 @@ private fun TranscriptBubble(entry: TranscriptEntry, timeFmt: SimpleDateFormat, 
                 }
                 Text(entry.text, color = fg, style = MaterialTheme.typography.bodyMedium, fontWeight = if (entry.isAlert) FontWeight.SemiBold else FontWeight.Normal)
                 
-                if (entry.isAlert && entry.latitude != null && entry.longitude != null) {
-                    val lat = entry.latitude
-                    val lon = entry.longitude
-                    val df = java.text.DecimalFormat("#.####")
-                    Text("Location: ${df.format(lat)}, ${df.format(lon)}", style = MaterialTheme.typography.bodySmall, color = fg)
-                    if (!sent) {
-                        val hasPerm = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
-                                      ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-                        if (hasPerm) {
-                            val localLoc = LocationHelper.getLastKnownLocation(context)
-                            if (localLoc != null) {
-                                val dist = LocationHelper.calculateDistanceMeters(localLoc.latitude, localLoc.longitude, lat, lon)
-                                val bearing = LocationHelper.calculateBearing(localLoc.latitude, localLoc.longitude, lat, lon)
-                                val dir = LocationHelper.getBearingDirection(bearing)
-                                val distStr = if (dist > 1000) String.format("%.1f km", dist / 1000f) else "${dist.toInt()} m"
-                                EmergencyCompassView(bearingDeg = bearing, distanceStr = distStr, directionStr = dir)
+                if (entry.isAlert) {
+                    if (entry.latitude != null && entry.longitude != null) {
+                        val lat = entry.latitude
+                        val lon = entry.longitude
+                        val accStr = LocationHelper.formatAccuracy(entry.accuracy)
+                        val ageStr = LocationHelper.formatLocationAge(entry.locationTimestampMs ?: entry.sentMs)
+
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "GPS: ${LocationHelper.formatCoordinates(lat, lon)} ${if (accStr.isNotBlank()) "($accStr)" else ""}",
+                                            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.SemiBold),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        if (ageStr.isNotBlank()) {
+                                            Text(
+                                                text = "Fix age: $ageStr",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.outline
+                                            )
+                                        }
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            LocationHelper.openMap(context, lat, lon, "Alert: ${entry.text}")
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Map,
+                                            contentDescription = "Open Map",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+
+                                if (!sent) {
+                                    val hasPerm = ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                                                  ContextCompat.checkSelfPermission(context, android.Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                                    if (hasPerm) {
+                                        val localLoc = LocationHelper.getLastKnownLocation(context)
+                                        if (localLoc != null) {
+                                            val dist = LocationHelper.calculateDistanceMeters(localLoc.latitude, localLoc.longitude, lat, lon)
+                                            val bearing = LocationHelper.calculateBearing(localLoc.latitude, localLoc.longitude, lat, lon)
+                                            val dir = LocationHelper.getBearingDirection(bearing)
+                                            val distStr = LocationHelper.formatDistance(dist)
+                                            EmergencyCompassView(bearingDeg = bearing, distanceStr = distStr, directionStr = dir)
+                                        }
+                                    }
+                                }
                             }
                         }
+                    } else {
+                        val statusText = when (entry.locationStatus) {
+                            "Permission denied", "PERMISSION_DENIED" -> "Location: Permission denied"
+                            "Location services disabled", "LOCATION_SERVICES_DISABLED" -> "Location: Services disabled (GPS off)"
+                            "Waiting for location", "WAITING_FOR_LOCATION" -> "Location: Waiting for fix"
+                            else -> "Location: Unavailable (No GPS fix)"
+                        }
+                        Text(
+                            text = statusText,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = fg.copy(alpha = 0.85f),
+                            fontWeight = FontWeight.Medium
+                        )
                     }
-                } else if (entry.isAlert && sent) {
-                    Text("Location unavailable", style = MaterialTheme.typography.bodySmall, color = fg.copy(alpha = 0.7f))
                 }
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -766,7 +970,9 @@ private fun LatencyPanel(entries: List<TranscriptEntry>, expanded: Boolean, onTo
             }
 
             if (lastRecv != null && !expanded) {
-                val totalMs = if (lastRecv.ttsStartedMs > 0 && lastRecv.micPauseDetectedMs > 0) {
+                val totalMs = if (lastRecv.totalE2eLatencyMs > 0L) {
+                    lastRecv.totalE2eLatencyMs
+                } else if (lastRecv.ttsStartedMs > 0 && lastRecv.micPauseDetectedMs > 0) {
                     lastRecv.ttsStartedMs - lastRecv.micPauseDetectedMs
                 } else null
                 totalMs?.let {
@@ -811,26 +1017,24 @@ private fun LatencyPanel(entries: List<TranscriptEntry>, expanded: Boolean, onTo
                         )
                         HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
 
-                        val sttMs = if (lastRecv.sttCompleteMs > 0 && lastRecv.micPauseDetectedMs > 0) {
+                        val sttMs = if (lastRecv.sttLatencyMs > 0L) lastRecv.sttLatencyMs else if (lastRecv.sttCompleteMs > 0 && lastRecv.micPauseDetectedMs > 0) {
                             lastRecv.sttCompleteMs - lastRecv.micPauseDetectedMs
-                        } else null
-                        LatencyRow(label = "STT (mic pause → text)", ms = sttMs ?: 0L)
+                        } else 0L
+                        LatencyRow(label = "STT (mic pause → text)", ms = sttMs)
 
-                        val netMs = if (lastRecv.receivedMs > 0 && lastRecv.sentMs > 0) {
+                        val netMs = if (lastRecv.networkLatencyMs > 0L) lastRecv.networkLatencyMs else if (lastRecv.receivedMs > 0 && lastRecv.sentMs > 0) {
                             lastRecv.receivedMs - lastRecv.sentMs
-                        } else null
-                        LatencyRow(label = "Transport (send → recv)", ms = netMs ?: 0L)
+                        } else 0L
+                        LatencyRow(label = "Transport (send → recv)", ms = netMs)
 
-                        val ttsMs = if (lastRecv.ttsStartedMs > 0 && lastRecv.receivedMs > 0) {
+                        val ttsMs = if (lastRecv.ttsLatencyMs > 0L) lastRecv.ttsLatencyMs else if (lastRecv.ttsStartedMs > 0 && lastRecv.receivedMs > 0) {
                             lastRecv.ttsStartedMs - lastRecv.receivedMs
-                        } else null
-                        LatencyRow(label = "TTS dispatch (recv → play)", ms = ttsMs ?: 0L)
+                        } else 0L
+                        LatencyRow(label = "TTS synthesis (start → audio)", ms = ttsMs)
 
-                        val totalMs = if (lastRecv.ttsStartedMs > 0 && lastRecv.micPauseDetectedMs > 0) {
-                            lastRecv.ttsStartedMs - lastRecv.micPauseDetectedMs
-                        } else null
+                        val totalMs = if (lastRecv.totalE2eLatencyMs > 0L) lastRecv.totalE2eLatencyMs else (sttMs + netMs + ttsMs)
                         HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
-                        LatencyRow(label = "TOTAL latency", ms = totalMs ?: 0L, bold = true)
+                        LatencyRow(label = "TOTAL latency", ms = totalMs, bold = true)
                     }
                 }
             }
@@ -852,5 +1056,48 @@ private fun LatencyRow(label: String, ms: Long, bold: Boolean = false) {
                 else       -> Color(0xFFF44336)
             },
         )
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Live Telemetry Overlay
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun TelemetryOverlay(
+    telemetry: TelemetryState,
+    modifier: Modifier = Modifier,
+) {
+    if (!telemetry.hasData) return
+
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
+        shadowElevation = 4.dp,
+        modifier = modifier,
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = "STT: ${telemetry.sttLatencyMs}ms | RTF: ${String.format(Locale.US, "%.2f", telemetry.rtf)}",
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "TTS: ${telemetry.ttsLatencyMs}ms | E2E: ${telemetry.e2eLatencyMs}ms",
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "Payload: ${telemetry.payloadBytes}B | Net: ${telemetry.transport.ifBlank { "P2P" }}",
+                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
     }
 }

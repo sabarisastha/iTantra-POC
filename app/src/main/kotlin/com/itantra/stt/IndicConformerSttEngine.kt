@@ -206,6 +206,8 @@ class IndicConformerSttEngine(
 
         val langCode = modelManager.currentSttLang ?: lang
         var text = ""
+        var sttLatency = 0L
+        var rtfVal = 0f
 
         if (recognizer != null) {
             val acquiredRecognizer = modelManager.acquireSttForInference()
@@ -221,7 +223,10 @@ class IndicConformerSttEngine(
 
                     text = result.text.trim()
                     val latencyMs = System.currentTimeMillis() - startMs
-                    Log.d(TAG, "STT inference done in ${latencyMs}ms: '$text'")
+                    sttLatency = latencyMs
+                    val audioDurationMs = (audioData.size.toFloat() / AudioRecorder.SAMPLE_RATE) * 1000f
+                    rtfVal = if (audioDurationMs > 0f) latencyMs.toFloat() / audioDurationMs else 0f
+                    Log.d(TAG, "STT inference done in ${latencyMs}ms (RTF: $rtfVal): '$text'")
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -238,14 +243,16 @@ class IndicConformerSttEngine(
         }
 
         val seqId = sequenceIdCounter.incrementAndGet()
-        Log.d(TAG, "[ITAN-STT] Recognized: '$text' lang=$langCode seq=$seqId")
+        Log.d(TAG, "[ITAN-STT] Recognized: '$text' lang=$langCode seq=$seqId rtf=$rtfVal")
         _recognizedSentences.emit(
             RecognizedSentence(
                 text         = text,
                 languageCode = langCode,
                 isAlert      = false,
-                timestampMs  = System.currentTimeMillis(),
-                sequenceId   = seqId
+                timestampMs  = System.currentTimeMillis() - sttLatency,
+                sequenceId   = seqId,
+                sttLatencyMs = sttLatency,
+                rtf          = rtfVal,
             )
         )
     }

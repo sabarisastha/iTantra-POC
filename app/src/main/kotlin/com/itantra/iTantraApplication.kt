@@ -54,7 +54,7 @@ class iTantraApplication : Application() {
      * Single pipeline orchestrator — PTT and Phone modes both route through here.
      */
     val sessionController: SessionController by lazy {
-        SessionController(sttEngine, ttsEngine, transport, historyDao)
+        SessionController(sttEngine, ttsEngine, transport, historyDao, this)
     }
 
     override fun onTerminate() {

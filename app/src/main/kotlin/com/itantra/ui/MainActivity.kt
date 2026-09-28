@@ -31,7 +31,8 @@ class MainActivity : ComponentActivity() {
             android.util.Log.w("MainActivity", "Permissions denied: $denied")
         }
         val recordAudioGranted = results[Manifest.permission.RECORD_AUDIO] == true
-        val locationGranted = results[Manifest.permission.ACCESS_FINE_LOCATION] == true
+        val locationGranted = results[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                              results[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (recordAudioGranted && locationGranted) {
             permissionsGranted.value = true
         }
