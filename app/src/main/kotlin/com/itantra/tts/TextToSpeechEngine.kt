@@ -27,6 +27,13 @@ interface TextToSpeechEngine {
      */
     fun speak(sentence: RecognizedSentence)
 
+    /**
+     * Synthesize and play [sentence], suspending until audio playback finishes completely.
+     */
+    suspend fun speakAndAwait(sentence: RecognizedSentence) {
+        speak(sentence)
+    }
+
     /** Begin loading a local language model before the first incoming transmission. */
     fun prewarm(languageCode: String) {}
 

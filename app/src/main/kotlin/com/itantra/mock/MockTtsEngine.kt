@@ -11,6 +11,7 @@ import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import com.itantra.stt.RecognizedSentence
 import com.itantra.tts.TextToSpeechEngine
+import kotlinx.coroutines.suspendCancellableCoroutine
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -23,6 +24,7 @@ class MockTtsEngine(private val context: Context) : TextToSpeechEngine {
     @Volatile private var initialized = false
     private val pendingUtterances = mutableListOf<RecognizedSentence>()
     private val alertPrevVolumes = ConcurrentHashMap<String, Int>()
+    private val completionCallbacks = ConcurrentHashMap<String, () -> Unit>()
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     @Volatile private var alertFocusRequest: AudioFocusRequest? = null
@@ -54,7 +56,24 @@ class MockTtsEngine(private val context: Context) : TextToSpeechEngine {
     }
 
     override fun speak(sentence: RecognizedSentence) {
-        Log.d(TAG, "speak() requested: text='${sentence.text}', lang='${sentence.languageCode}', alert=${sentence.isAlert}, initialized=$initialized")
+        val uid = UUID.randomUUID().toString()
+        speakWithUid(sentence, uid)
+    }
+
+    override suspend fun speakAndAwait(sentence: RecognizedSentence) =
+        suspendCancellableCoroutine<Unit> { continuation ->
+            val uid = UUID.randomUUID().toString()
+            completionCallbacks[uid] = {
+                if (continuation.isActive) continuation.resumeWith(Result.success(Unit))
+            }
+            continuation.invokeOnCancellation {
+                completionCallbacks.remove(uid)
+            }
+            speakWithUid(sentence, uid)
+        }
+
+    private fun speakWithUid(sentence: RecognizedSentence, uid: String) {
+        Log.d(TAG, "speak() requested: text='${sentence.text}', lang='${sentence.languageCode}', alert=${sentence.isAlert}, initialized=$initialized, uid=$uid")
         if (!initialized || tts == null) {
             synchronized(pendingUtterances) {
                 pendingUtterances.add(sentence)
@@ -63,7 +82,6 @@ class MockTtsEngine(private val context: Context) : TextToSpeechEngine {
             initTts()
             return
         }
-        val uid    = UUID.randomUUID().toString()
         val locale = localeFor(sentence.languageCode)
         val result = tts?.setLanguage(locale)
         if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
@@ -163,6 +181,9 @@ class MockTtsEngine(private val context: Context) : TextToSpeechEngine {
             Log.d(TAG, "TTS utterance completed: uid=$uid")
             restoreVolume(uid)
             releaseAlertFocus()
+            if (uid != null) {
+                completionCallbacks.remove(uid)?.invoke()
+            }
         }
         
         @Deprecated("Deprecated in Java")
@@ -170,12 +191,18 @@ class MockTtsEngine(private val context: Context) : TextToSpeechEngine {
             Log.e(TAG, "TTS utterance error: uid=$uid")
             restoreVolume(uid)
             releaseAlertFocus()
+            if (uid != null) {
+                completionCallbacks.remove(uid)?.invoke()
+            }
         }
         
         override fun onError(uid: String?, errorCode: Int) {
             Log.e(TAG, "TTS utterance error on $uid, code=$errorCode")
             restoreVolume(uid)
             releaseAlertFocus()
+            if (uid != null) {
+                completionCallbacks.remove(uid)?.invoke()
+            }
         }
         
         private fun restoreVolume(uid: String?) {

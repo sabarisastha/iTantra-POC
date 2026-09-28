@@ -59,7 +59,6 @@ android {
 
 dependencies {
     implementation(files("libs/sherpa-onnx-1.13.7.aar"))
-    implementation(libs.onnxruntime.android)
     // ── Jetpack Compose BOM ──────────────────────────────────────────────────
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
@@ -85,5 +84,11 @@ dependencies {
 
     // ── kotlinx.serialization — Payload marshalling over TCP socket ──────────
     implementation(libs.kotlinx.serialization.json)
+
+    // ── Testing dependencies ──────────────────────────────────────────────────
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }
 

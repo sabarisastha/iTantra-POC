@@ -42,15 +42,22 @@ class IndicParlerTtsEngine(
         }
 
         scope.launch {
-            jobLock.withLock {
-                if (sentence.isAlert) {
-                    currentJob?.cancel()
-                    audioPlayer.stop()
-                }
-                currentJob = scope.launch {
-                    synthesizeAndPlay(sentence)
-                }
+            synthesizeAndPlay(sentence)
+        }
+    }
+
+    override suspend fun speakAndAwait(sentence: RecognizedSentence) = withContext(Dispatchers.Default) {
+        if (isShutdown) return@withContext
+        jobLock.withLock {
+            if (sentence.isAlert) {
+                currentJob?.cancel()
+                audioPlayer.stop()
             }
+            val job = scope.launch {
+                synthesizeAndPlay(sentence)
+            }
+            currentJob = job
+            job.join()
         }
     }
 

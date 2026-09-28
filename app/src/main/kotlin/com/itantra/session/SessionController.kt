@@ -576,7 +576,23 @@ class SessionController(
         )
 
         val ttsStartedMs = System.currentTimeMillis()
-        ttsEngine.speak(sentence)
+
+        scope.launch {
+            try {
+                ttsEngine.speakAndAwait(sentence)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error during TTS playback", e)
+            } finally {
+                // Immediately cancel 15s floor timeout and return floor to IDLE upon TTS completion
+                floorTimeoutJob?.cancel()
+                floorTimeoutJob = null
+
+                if (_mode.value == SessionMode.PTT && _floorState.value == FloorState.REMOTE_TRANSMITTING) {
+                    _floorState.value = FloorState.IDLE
+                    Log.d(TAG, "[ITANTRA-SESSION] TTS audio playback completed — floor immediately returned to IDLE")
+                }
+            }
+        }
 
         appendTranscript(
             TranscriptEntry(

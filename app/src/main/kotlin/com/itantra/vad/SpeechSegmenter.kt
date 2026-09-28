@@ -41,7 +41,7 @@ class SpeechSegmenter(
                     if (consecutiveVoiced >= attackFrames) {
                         currentState = State.IN_SPEECH
                         consecutiveSilence = 0
-                        Log.d(TAG, "SpeechSegmenter: SILENCE -> SPEECH_START (prob=${prob.fmt()})")
+                        runCatching { Log.d(TAG, "SpeechSegmenter: SILENCE -> SPEECH_START (prob=${prob.fmt()})") }
                         SegmenterEvent.SPEECH_START
                     } else {
                         SegmenterEvent.SILENCE
@@ -58,7 +58,7 @@ class SpeechSegmenter(
                         currentState = State.IN_SILENCE
                         consecutiveVoiced = 0
                         consecutiveSilence = 0
-                        Log.d(TAG, "SpeechSegmenter: SPEECH -> SPEECH_END (hangover elapsed)")
+                        runCatching { Log.d(TAG, "SpeechSegmenter: SPEECH -> SPEECH_END (hangover elapsed)") }
                         SegmenterEvent.SPEECH_END
                     } else {
                         SegmenterEvent.SPEECH_CONTINUING
@@ -77,7 +77,7 @@ class SpeechSegmenter(
         currentState = State.IN_SILENCE
         consecutiveVoiced = 0
         consecutiveSilence = 0
-        Log.d(TAG, "SpeechSegmenter reset to IN_SILENCE")
+        runCatching { Log.d(TAG, "SpeechSegmenter reset to IN_SILENCE") }
     }
 
     private fun Float.fmt() = "%.2f".format(this)
