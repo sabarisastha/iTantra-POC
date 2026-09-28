@@ -99,9 +99,9 @@ val SUPPORTED_LANGUAGES = listOf(
     ),
     LanguageConfig(
         code = "or",
-        displayName = "Odia (Coming Soon)",
-        sttModelUrl = "",
-        sttTokensUrl = "",
+        displayName = "Odia",
+        sttModelUrl = "$HF_STT_BASE/or/model.int8.onnx",
+        sttTokensUrl = "$HF_STT_BASE/tokens.txt",
         ttsModelUrl = "$HF_TTS_RASA_BASE/model.onnx",
         ttsTokensUrl = "$HF_TTS_RASA_BASE/tokens.txt",
         ttsSharedModelId = "vits-rasa-13",

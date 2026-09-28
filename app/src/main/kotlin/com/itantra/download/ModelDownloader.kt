@@ -74,62 +74,175 @@ class ModelDownloader(private val context: Context) {
     }
 
     /**
-     * Synchronously downloads [url] to [destFile] using atomic write (.tmp -> rename).
+     * Checks whether a file exists and meets minimum valid size/format constraints.
+     */
+    fun isValidFile(file: File): Boolean {
+        if (!file.exists() || file.length() == 0L) return false
+        val name = file.name.lowercase()
+        return when {
+            name.endsWith(".onnx") -> file.length() >= 1_000_000L // ONNX models must be at least 1MB
+            name.endsWith(".txt") -> {
+                if (file.length() < 50L) return false
+                try {
+                    val prefix = file.inputStream().use { input ->
+                        val buf = ByteArray(minOf(200, file.length().toInt()))
+                        input.read(buf)
+                        String(buf)
+                    }
+                    !prefix.contains("<!DOCTYPE", ignoreCase = true) &&
+                    !prefix.contains("<html", ignoreCase = true) &&
+                    !prefix.startsWith("version https://git-lfs")
+                } catch (e: Exception) {
+                    true
+                }
+            }
+            else -> file.length() > 0L
+        }
+    }
+
+    private fun validateDownloadedFile(file: File) {
+        val name = file.name.lowercase()
+        if (name.endsWith(".onnx") && file.length() < 1_000_000L) {
+            val preview = runCatching {
+                file.inputStream().use { input ->
+                    val buf = ByteArray(minOf(300, file.length().toInt()))
+                    input.read(buf)
+                    String(buf)
+                }
+            }.getOrDefault("")
+            throw IllegalStateException("Downloaded ONNX model ${file.name} is too small (${file.length()} bytes). Content preview: $preview")
+        }
+        if (name.endsWith(".txt")) {
+            if (file.length() < 50L) {
+                throw IllegalStateException("Downloaded tokens file ${file.name} is too small (${file.length()} bytes)")
+            }
+            val preview = runCatching {
+                file.inputStream().use { input ->
+                    val buf = ByteArray(minOf(300, file.length().toInt()))
+                    input.read(buf)
+                    String(buf)
+                }
+            }.getOrDefault("")
+            if (preview.contains("<!DOCTYPE", ignoreCase = true) || preview.contains("<html", ignoreCase = true)) {
+                throw IllegalStateException("Downloaded tokens file ${file.name} is an HTML page instead of tokens text")
+            }
+            if (preview.startsWith("version https://git-lfs")) {
+                throw IllegalStateException("Downloaded tokens file ${file.name} is a Git LFS pointer instead of actual tokens")
+            }
+        }
+    }
+
+    /**
+     * Synchronously downloads [url] to [destFile] using atomic write (.tmp -> rename),
+     * automatically following HTTP/HTTPS redirects and validating downloaded binary integrity.
      */
     fun downloadSync(
         url: String,
         destFile: File,
         onProgress: ((downloaded: Long, total: Long) -> Unit)? = null
     ) {
-        if (destFile.exists() && destFile.length() > 0L) return
+        if (isValidFile(destFile)) return
 
         val tmpFile = File("${destFile.absolutePath}.tmp")
         tmpFile.delete()
         destFile.parentFile?.mkdirs()
 
-        val connection = URL(url).openConnection() as HttpURLConnection
-        if (connection is javax.net.ssl.HttpsURLConnection && android.os.Build.VERSION.SDK_INT < 24) {
-            try {
-                val sc = javax.net.ssl.SSLContext.getInstance("TLSv1.2")
-                sc.init(null, null, null)
-                connection.sslSocketFactory = sc.socketFactory
-            } catch (e: Exception) {
-                android.util.Log.w("ModelDownloader", "TLS 1.2 init failed: ${e.message}")
-            }
+        var currentUrl = if (url.contains("huggingface.co") && url.contains("/blob/")) {
+            url.replace("/blob/", "/resolve/")
+        } else {
+            url
         }
-        connection.connectTimeout = 30_000
-        connection.readTimeout = 120_000
-        connection.instanceFollowRedirects = true
+
+        var redirects = 0
+        val maxRedirects = 10
+        var connection: HttpURLConnection? = null
 
         try {
-            connection.connect()
-            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-                throw Exception("HTTP ${connection.responseCode} for ${destFile.name}")
-            }
+            while (redirects < maxRedirects) {
+                val targetUrl = URL(currentUrl)
+                val conn = targetUrl.openConnection() as HttpURLConnection
+                connection = conn
 
-            val totalBytes = connection.contentLengthLong
-            var downloadedBytes = 0L
-
-            connection.inputStream.use { input ->
-                FileOutputStream(tmpFile).use { output ->
-                    val buffer = ByteArray(65_536)
-                    var bytesRead: Int
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
-                        output.write(buffer, 0, bytesRead)
-                        downloadedBytes += bytesRead
-                        onProgress?.invoke(downloadedBytes, totalBytes)
+                if (conn is javax.net.ssl.HttpsURLConnection && android.os.Build.VERSION.SDK_INT < 24) {
+                    try {
+                        val sc = javax.net.ssl.SSLContext.getInstance("TLSv1.2")
+                        sc.init(null, null, null)
+                        conn.sslSocketFactory = sc.socketFactory
+                    } catch (e: Exception) {
+                        android.util.Log.w("ModelDownloader", "TLS 1.2 init failed: ${e.message}")
                     }
-                    output.flush()
                 }
+
+                conn.connectTimeout = 30_000
+                conn.readTimeout = 120_000
+                conn.instanceFollowRedirects = false // Follow manually across domains and protocol switches
+
+                conn.connect()
+                val responseCode = conn.responseCode
+
+                // Handle 301, 302, 303, 307, 308 redirects (e.g. Hugging Face -> CDN)
+                if (responseCode in 300..399) {
+                    val location = conn.getHeaderField("Location")
+                        ?: throw Exception("HTTP $responseCode redirect without Location header for ${destFile.name}")
+                    currentUrl = if (location.startsWith("http://") || location.startsWith("https://")) {
+                        location
+                    } else {
+                        URL(targetUrl, location).toString()
+                    }
+                    conn.disconnect()
+                    redirects++
+                    continue
+                }
+
+                if (responseCode != HttpURLConnection.HTTP_OK) {
+                    throw Exception("HTTP $responseCode for ${destFile.name}")
+                }
+
+                val totalBytes = conn.contentLengthLong
+                var downloadedBytes = 0L
+                var maxEmittedProgress = 0
+
+                conn.inputStream.use { input ->
+                    FileOutputStream(tmpFile).use { output ->
+                        val buffer = ByteArray(65_536)
+                        var bytesRead: Int
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            output.write(buffer, 0, bytesRead)
+                            downloadedBytes += bytesRead
+                            if (totalBytes > 0L) {
+                                val currentProgress = ((downloadedBytes.toFloat() / totalBytes) * 100).toInt().coerceIn(0, 100)
+                                if (currentProgress >= maxEmittedProgress) {
+                                    maxEmittedProgress = currentProgress
+                                    onProgress?.invoke(downloadedBytes, totalBytes)
+                                }
+                            } else {
+                                onProgress?.invoke(downloadedBytes, totalBytes)
+                            }
+                        }
+                        output.flush()
+                    }
+                }
+
+                if (totalBytes > 0L && downloadedBytes < totalBytes) {
+                    throw Exception("Incomplete download for ${destFile.name}: got $downloadedBytes of $totalBytes bytes")
+                }
+
+                // Validate downloaded file format & minimum size
+                validateDownloadedFile(tmpFile)
+
+                if (!tmpFile.renameTo(destFile)) {
+                    tmpFile.copyTo(destFile, overwrite = true)
+                    tmpFile.delete()
+                }
+                break
             }
 
-            if (!tmpFile.renameTo(destFile)) {
-                tmpFile.copyTo(destFile, overwrite = true)
-                tmpFile.delete()
+            if (redirects >= maxRedirects) {
+                throw Exception("Too many redirects ($redirects) downloading ${destFile.name}")
             }
         } finally {
-            connection.disconnect()
-            if (tmpFile.exists() && !destFile.exists()) tmpFile.delete()
+            connection?.disconnect()
+            if (tmpFile.exists()) tmpFile.delete()
         }
     }
 
