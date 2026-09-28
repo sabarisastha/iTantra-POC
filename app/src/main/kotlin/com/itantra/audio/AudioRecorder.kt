@@ -68,39 +68,45 @@ class AudioRecorder {
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING)
         val bufSize = maxOf(minBuf, 4096)
 
-        var recordSource = audioSource
-        var recorder = AudioRecord(
-            recordSource,
-            SAMPLE_RATE,
-            CHANNEL,
-            ENCODING,
-            bufSize
-        )
+        val audioSourcesToTry = intArrayOf(
+            audioSource,
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            MediaRecorder.AudioSource.DEFAULT
+        ).distinct().toIntArray()
 
-        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "INIT: AudioRecord failed to initialize with source $recordSource")
-            recorder.release()
-            if (recordSource != MediaRecorder.AudioSource.MIC) {
-                Log.w(TAG, "Retrying AudioRecord initialization with MediaRecorder.AudioSource.MIC fallback")
-                recordSource = MediaRecorder.AudioSource.MIC
-                recorder = AudioRecord(
-                    recordSource,
+        var recorder: AudioRecord? = null
+        var selectedSource = -1
+
+        for (src in audioSourcesToTry) {
+            try {
+                val rec = AudioRecord(
+                    src,
                     SAMPLE_RATE,
                     CHANNEL,
                     ENCODING,
                     bufSize
                 )
+                if (rec.state == AudioRecord.STATE_INITIALIZED) {
+                    recorder = rec
+                    selectedSource = src
+                    break
+                } else {
+                    rec.release()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "AudioRecord init failed for source $src: ${e.message}")
             }
         }
 
-        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "INIT: AudioRecord failed to initialize with fallback source $recordSource")
-            recorder.release()
+        if (recorder == null || selectedSource == -1) {
+            Log.e(TAG, "INIT: AudioRecord failed to initialize with all candidate audio sources!")
             return
         }
 
         audioRecord = recorder
-        Log.i(TAG, "START: AudioRecord initialized successfully with source $recordSource")
+        Log.i(TAG, "START: AudioRecord initialized successfully with source $selectedSource")
         audioRecord?.startRecording()
         recording = true
 

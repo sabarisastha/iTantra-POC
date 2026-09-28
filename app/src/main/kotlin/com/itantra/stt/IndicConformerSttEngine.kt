@@ -110,14 +110,22 @@ class IndicConformerSttEngine(
         }
     }
 
-    private fun handleStart() {
+    private suspend fun handleStart() {
         if (isRecording) {
             Log.w(TAG, "start() called while already recording — ignored")
             return
         }
 
-        Log.d(TAG, "IndicConformerSttEngine.start() invoked, starting AudioRecorder")
         isRecording = true
+
+        if (audioRecorder != null) {
+            Log.d(TAG, "Releasing existing AudioRecorder and waiting 100ms for HAL unbind")
+            audioRecorder?.stopRecording()
+            audioRecorder = null
+            delay(100L)
+        }
+
+        Log.d(TAG, "IndicConformerSttEngine.start() invoked, starting AudioRecorder")
 
         // Create a fresh VAD pipeline for this recording session
         val pipeline = AdaptiveNoiseFloorVadPipeline(context)
@@ -152,9 +160,11 @@ class IndicConformerSttEngine(
                     scope.launch {
                         if (!isRecording) return@launch
                         val segment = pipeline.processFrame(frame)
-                        if (segment != null) {
-                            Log.d(TAG, "[ITAN-STT] VAD speech segment complete: ${segment.size} samples (${segment.size / 16000f}s) — dispatching to STT")
-                            processSpeechSegment(segment)
+                        if (segment != null && segment.isNotEmpty()) {
+                            Log.d(TAG, "[ITAN-STT] Hands-free segment ready: ${segment.size} samples (${segment.size / 16000.0}s) — dispatching")
+                            scope.launch(Dispatchers.Default) {
+                                processSpeechSegment(segment)
+                            }
                         }
                     }
                 }

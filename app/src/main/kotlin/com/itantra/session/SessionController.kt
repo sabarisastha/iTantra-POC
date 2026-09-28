@@ -118,7 +118,11 @@ class SessionController(
                         )
                         if (_mode.value == SessionMode.PHONE) {
                             Log.d(TAG, "[ITANTRA-SESSION] Connected in PHONE mode — auto-starting continuous STT")
-                            sttEngine.start()
+                            scope.launch {
+                                sttEngine.stop()
+                                delay(150L)
+                                sttEngine.start()
+                            }
                         }
                     }
                     is ConnectionState.Idle, is ConnectionState.Error -> {
@@ -176,9 +180,17 @@ class SessionController(
                 }
                 floorTimeoutJob?.cancel()
                 _floorState.value = FloorState.IDLE
-                sttEngine.stop()  // ensure clean state before restart
-                sttEngine.start() // continuous VAD-gated STT in phone mode
                 Log.d(TAG, "[ITANTRA-PHONE] Continuous VAD-gated STT started")
+                scope.launch {
+                    try {
+                        sttEngine.stop()
+                        delay(150L)
+                        Log.d(TAG, "[ITANTRA-PHONE] Launching sttEngine.start() for hands-free capture")
+                        sttEngine.start()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "[ITANTRA-PHONE] Failed to start STT engine in Phone Mode", e)
+                    }
+                }
             }
             old == SessionMode.PHONE && newMode == SessionMode.PTT -> {
                 // PHONE -> PTT: stop continuous STT; floor control takes over.
@@ -434,7 +446,11 @@ class SessionController(
                 applyModeTransition(parsedMode)
             } else if (_mode.value == SessionMode.PHONE) {
                 // Ensure continuous STT is running if we re-validated an existing PHONE session
-                sttEngine.start()
+                scope.launch {
+                    sttEngine.stop()
+                    delay(150L)
+                    sttEngine.start()
+                }
             }
 
         } else if (text.startsWith("SESSION_REJECT:")) {
@@ -581,9 +597,8 @@ class SessionController(
             try {
                 ttsEngine.speakAndAwait(sentence)
             } catch (e: Exception) {
-                Log.e(TAG, "Error during TTS playback", e)
+                Log.e(TAG, "Error playing incoming speech", e)
             } finally {
-                // Immediately cancel 15s floor timeout and return floor to IDLE upon TTS completion
                 floorTimeoutJob?.cancel()
                 floorTimeoutJob = null
 

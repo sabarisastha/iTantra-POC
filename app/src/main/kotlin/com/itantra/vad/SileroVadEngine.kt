@@ -97,11 +97,22 @@ class SileroVadEngine(
             }
             try {
                 val floatFrame = FloatArray(frameToProcess.size)
+                var sumSq = 0.0
                 for (i in frameToProcess.indices) {
+                    val sample = frameToProcess[i].toDouble()
+                    sumSq += sample * sample
                     floatFrame[i] = frameToProcess[i] / 32768.0f
                 }
+                val rms = sqrt(sumSq / frameToProcess.size)
 
-                val prob = instance.compute(floatFrame)
+                var prob = instance.compute(floatFrame)
+
+                // Safety fallback: If JNI compute() returns low prob (< 0.15) during high speech energy (rms > 180.0), use fallback energy VAD
+                if (rms > 180.0 && prob < 0.15f) {
+                    val fallback = fallbackVad(frameToProcess)
+                    prob = fallback.speechProbability
+                }
+
                 return@withContext VadResult(
                     speechProbability = prob,
                     isSpeech = prob >= threshold

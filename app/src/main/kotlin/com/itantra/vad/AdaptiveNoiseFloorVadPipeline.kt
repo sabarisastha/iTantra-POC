@@ -48,10 +48,10 @@ class AdaptiveNoiseFloorVadPipeline(
     /** Gain factor scaling RMS delta into threshold adjustment. */
     private val ADAPT_GAIN = 0.25f
 
-    /** Maximum upward adjustment (noisier → higher threshold up to 0.75). */
-    private val MAX_RAISE = 0.25f
+    /** Maximum upward adjustment (noisier → slightly higher threshold up to 0.58). */
+    private val MAX_RAISE = 0.08f
 
-    /** Maximum downward adjustment (quieter → lower threshold). */
+    /** Maximum downward adjustment (quieter → lower threshold down to 0.35). */
     private val MAX_LOWER = 0.15f
 
     /**
@@ -123,12 +123,25 @@ class AdaptiveNoiseFloorVadPipeline(
             Log.e(TAG, "CRITICAL: AudioRecord delivering completely silent 0-filled buffers!")
         }
 
-        // Buffer frame if speech is detected OR if audio has energy (rawRms > 60.0) OR fallback mode is active
-        if (vadResult.isSpeech || rawRms > 60.0 || SileroVadEngine.isOrtUnavailable) {
+        // Buffer frame if speech is detected OR segmenter is in active speech state OR frame has speech energy (rawRms > 150.0) OR fallback mode is active
+        if (vadResult.isSpeech || segmenter.isSpeechActive || rawRms > 150.0 || SileroVadEngine.isOrtUnavailable) {
             accumulateFrame(frame)
         }
 
         val event = segmenter.process(vadResult)
+
+        val isBufferOverMax = synchronized(speechBuffer) { speechBuffer.size >= 56000 }
+
+        if (event == SegmenterEvent.SPEECH_END || isBufferOverMax) {
+            if (isBufferOverMax) {
+                Log.d(TAG, "[ITAN-VAD] Continuous speech reached 3.5s ceiling — auto-slicing segment for low latency")
+                segmenter.resetToSpeech()
+            } else {
+                val samples = speechBuffer.size
+                Log.d(TAG, "SPEECH_END — segment=$samples samples (${samples / 16000f}s)")
+            }
+            return@withContext drainBuffer()
+        }
 
         when (event) {
             SegmenterEvent.SILENCE -> {
@@ -137,28 +150,12 @@ class AdaptiveNoiseFloorVadPipeline(
             }
             SegmenterEvent.SPEECH_START -> {
                 Log.d(TAG, "SPEECH_START — threshold=${adaptedThreshold.fmt()} emaRms=${emaRms.fmt()}")
-                if (!SileroVadEngine.isOrtUnavailable && !vadResult.isSpeech && rawRms <= 60.0) {
-                    accumulateFrame(frame)
-                }
                 null
             }
             SegmenterEvent.SPEECH_CONTINUING -> {
-                if (!SileroVadEngine.isOrtUnavailable && !vadResult.isSpeech && rawRms <= 60.0) {
-                    accumulateFrame(frame)
-                }
-                // Force-flush if the segment is unreasonably long
-                if (speechBuffer.size >= MAX_SEGMENT_SAMPLES) {
-                    Log.w(TAG, "Max segment length reached (${speechBuffer.size} samples) — force-flushing")
-                    drainBuffer()
-                } else {
-                    null
-                }
+                null
             }
-            SegmenterEvent.SPEECH_END -> {
-                val samples = speechBuffer.size
-                Log.d(TAG, "SPEECH_END — segment=$samples samples (${samples / 16000f}s)")
-                drainBuffer()
-            }
+            else -> null
         }
     }
 
@@ -241,8 +238,8 @@ class AdaptiveNoiseFloorVadPipeline(
     private fun updateNoiseFloor(frame: ShortArray, vadResult: VadResult) {
         if (frame.isEmpty()) return
 
-        // Only update EMA when Silero is also confident it's silence (prob < 0.30)
-        if (vadResult.speechProbability >= 0.30f) return
+        // Only update EMA when Silero is confident it's true silence (prob < 0.15)
+        if (vadResult.speechProbability >= 0.15f) return
 
         // Compute normalised RMS of this frame
         var sumSq = 0.0
@@ -252,19 +249,22 @@ class AdaptiveNoiseFloorVadPipeline(
         }
         val frameRms = sqrt(sumSq / frame.size).toFloat()
 
+        // Do not update noise floor EMA if frame has speech energy (> 2.5x baseline)
+        if (frameRms > BASELINE_RMS * 2.5f) return
+
         // Update EMA
         emaRms = EMA_ALPHA * frameRms + (1f - EMA_ALPHA) * emaRms
 
         // Relative deviation from baseline
         val delta = (emaRms - BASELINE_RMS) / max(BASELINE_RMS, 1e-6f)
 
-        // Compute new threshold with asymmetric clamping
+        // Compute new threshold with asymmetric clamping (capped between 0.35 and 0.58)
         val adjustment = (delta * ADAPT_GAIN).coerceIn(-MAX_LOWER, MAX_RAISE)
-        val newThreshold = (baseThreshold + adjustment).coerceIn(0.20f, 0.90f)
+        val newThreshold = (baseThreshold + adjustment).coerceIn(0.35f, 0.58f)
 
         adaptedThreshold = newThreshold
 
-        // Software dynamic threshold adaptation logging (no native C++ session destruction/re-creation)
+        // Software dynamic threshold adaptation logging
         if (abs(newThreshold - engineThreshold) > 0.02f) {
             Log.d(TAG, "Adapting software VAD threshold: ${engineThreshold.fmt()} → ${newThreshold.fmt()} " +
                     "(emaRms=${emaRms.fmt()}, delta=${delta.fmt()})")

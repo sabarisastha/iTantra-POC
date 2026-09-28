@@ -151,4 +151,37 @@ class SpeechSegmenterFsmTest {
             exceptions.isEmpty()
         )
     }
+
+    /**
+     * Test 4: Default hangover (9 frames ~288ms) triggers SPEECH_END on 9th silence frame.
+     */
+    @Test
+    fun testDefaultHangoverCut() {
+        val defaultSegmenter = SpeechSegmenter()
+        val voicedResult = VadResult(speechProbability = 0.85f, isSpeech = true)
+        val silenceResult = VadResult(speechProbability = 0.10f, isSpeech = false)
+
+        // 3 voiced frames -> IN_SPEECH
+        defaultSegmenter.process(voicedResult)
+        defaultSegmenter.process(voicedResult)
+        assertEquals(SegmenterEvent.SPEECH_START, defaultSegmenter.process(voicedResult))
+
+        // 8 silence frames -> SPEECH_CONTINUING
+        for (i in 1..8) {
+            assertEquals(SegmenterEvent.SPEECH_CONTINUING, defaultSegmenter.process(silenceResult))
+        }
+
+        // 9th silence frame -> SPEECH_END
+        assertEquals(SegmenterEvent.SPEECH_END, defaultSegmenter.process(silenceResult))
+        assertFalse(defaultSegmenter.isSpeechActive)
+    }
+
+    /**
+     * Test 5: resetToSpeech maintains IN_SPEECH state.
+     */
+    @Test
+    fun testResetToSpeech() {
+        segmenter.resetToSpeech()
+        assertTrue(segmenter.isSpeechActive)
+    }
 }
