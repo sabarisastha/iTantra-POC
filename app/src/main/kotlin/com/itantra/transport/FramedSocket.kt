@@ -19,7 +19,8 @@ private const val TAG = "ITAN-SOCKET"
 
 enum class FrameType(val code: Int) {
     JSON_PAYLOAD(1),
-    RAW_PCM(2)
+    RAW_PCM(2),
+    BINARY_PAYLOAD(3),
 }
 
 class FramedSocket(

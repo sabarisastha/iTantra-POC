@@ -36,6 +36,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import com.itantra.transport.binary.BinaryEncoder
 import java.util.UUID
 
 private const val TAG = "ITANTRA-SESSION"
@@ -716,7 +717,7 @@ class SessionController(
             senderQueueMs   = queueMs,
             rtf             = rtfVal,
         )
-        val encodedBytes = runCatching { json.encodeToString(payload).toByteArray(Charsets.UTF_8).size }.getOrDefault(0)
+        val encodedBytes = runCatching { BinaryEncoder.encode(payload).size }.getOrDefault(0)
 
         _telemetry.value = TelemetryState(
             sttLatencyMs   = sttLatency,
@@ -972,7 +973,7 @@ class SessionController(
         // Network transit time estimation (clamped between 5ms and 300ms if clock skew is detected)
         val rawNetTime = receivedMs - payload.sentTimestampMs
         val networkLatency = if (rawNetTime in 0..1000) rawNetTime else 15L // fallback to typical P2P wireless delay if clocks are skewed
-        val encodedBytes = runCatching { json.encodeToString(payload).toByteArray(Charsets.UTF_8).size }.getOrDefault(0)
+        val encodedBytes = runCatching { BinaryEncoder.encode(payload).size }.getOrDefault(0)
 
         val initialE2e = sttLatency + senderQueue + networkLatency
         val entry = TranscriptEntry(
