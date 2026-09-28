@@ -91,21 +91,25 @@ class ModelManager(private val context: Context) {
                 // Download STT
                 val sttFile = downloader.modelFile("stt", lang, "model.int8.onnx")
                 val sttTokens = downloader.sharedFile("stt", "tokens.txt")
-                if (config.sttModelUrl.isNotBlank() && (!sttFile.exists() || sttFile.length() == 0L)) {
+                if (config.sttModelUrl.isNotBlank() && !downloader.isValidFile(sttFile)) {
+                    if (sttFile.exists()) sttFile.delete()
                     _sttState.value = ModelState.Downloading(0)
                     downloader.downloadSync(config.sttModelUrl, sttFile) { dl, total ->
                         if (total > 0) _sttState.value = ModelState.Downloading(((dl.toFloat() / total) * 100).toInt())
                     }
                 }
-                if (config.sttTokensUrl.isNotBlank() && (!sttTokens.exists() || sttTokens.length() == 0L)) {
+                if (config.sttTokensUrl.isNotBlank() && !downloader.isValidFile(sttTokens)) {
+                    if (sttTokens.exists()) sttTokens.delete()
                     downloader.downloadSync(config.sttTokensUrl, sttTokens)
                 }
                 _sttState.value = ModelState.Idle
 
                 // TTS model download is bypassed — Android system TTS is used instead.
                 _ttsState.value = ModelState.Idle
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Throwable) {
-                Log.e(TAG, "preDownloadModels failed", e)
+                Log.e(TAG, "preDownloadModels failed for $lang", e)
                 val err = "Download failed: ${e.message}"
                 _sttState.value = ModelState.Error(err)
                 _ttsState.value = ModelState.Error(err)
@@ -118,9 +122,7 @@ class ModelManager(private val context: Context) {
         if (config.sttModelUrl.isBlank()) return true
         val sttFile = downloader.modelFile("stt", lang, "model.int8.onnx")
         val sttTokens = downloader.sharedFile("stt", "tokens.txt")
-        if (!sttFile.exists() || sttFile.length() == 0L) return false
-        if (!sttTokens.exists() || sttTokens.length() == 0L) return false
-        return true
+        return downloader.isValidFile(sttFile) && downloader.isValidFile(sttTokens)
     }
 
     suspend fun loadSttModel(lang: String): OfflineRecognizer? = sttMutex.withLock {
@@ -151,7 +153,17 @@ class ModelManager(private val context: Context) {
                 val modelFile  = downloader.modelFile("stt", lang, "model.int8.onnx")
                 val tokensFile = downloader.sharedFile("stt", "tokens.txt")
 
-                if (!modelFile.exists() || modelFile.length() == 0L) {
+                // Remove any stale or corrupted files before loading
+                if (modelFile.exists() && !downloader.isValidFile(modelFile)) {
+                    Log.w(TAG, "Purging invalid/corrupted STT model file: ${modelFile.absolutePath} (${modelFile.length()} bytes)")
+                    modelFile.delete()
+                }
+                if (tokensFile.exists() && !downloader.isValidFile(tokensFile)) {
+                    Log.w(TAG, "Purging invalid/corrupted STT tokens file: ${tokensFile.absolutePath} (${tokensFile.length()} bytes)")
+                    tokensFile.delete()
+                }
+
+                if (!downloader.isValidFile(modelFile)) {
                     _sttState.value = ModelState.Downloading(0)
                     Log.d(TAG, "Downloading STT model for $lang from ${config.sttModelUrl}")
                     downloader.downloadSync(config.sttModelUrl, modelFile) { dl, total ->
@@ -159,43 +171,58 @@ class ModelManager(private val context: Context) {
                     }
                 }
 
-                if (!tokensFile.exists() || tokensFile.length() == 0L) {
-                    Log.d(TAG, "Downloading shared tokens.txt")
+                if (!downloader.isValidFile(tokensFile)) {
+                    Log.d(TAG, "Downloading STT tokens from ${config.sttTokensUrl}")
                     downloader.downloadSync(config.sttTokensUrl, tokensFile)
+                }
+
+                if (modelFile.length() < 1_000_000L) {
+                    Log.e(TAG, "STT model file too small (${modelFile.length()} bytes) — likely a Git LFS pointer or corrupted download. Deleting and reporting error.")
+                    modelFile.delete()
+                    _sttState.value = ModelState.Error("Model file corrupted or incomplete (${modelFile.length()} bytes). Please re-download.")
+                    return@withContext null
                 }
 
                 _sttState.value = ModelState.Loading
 
                 // Release old model before loading new one
-                try { currentSttRecognizer?.release() } catch (e: Exception) { Log.w(TAG, "release old STT: ${e.message}") }
+                try { currentSttRecognizer?.release() } catch (e: Throwable) { Log.w(TAG, "release old STT: ${e.message}") }
                 currentSttRecognizer = null
                 currentSttLang = null
 
-                Log.d(TAG, "Creating OfflineRecognizer for $lang")
-                val recognizer = OfflineRecognizer(
-                    assetManager = null,
-                    config = OfflineRecognizerConfig().apply {
-                        modelConfig = OfflineModelConfig().apply {
-                            nemo = OfflineNemoEncDecCtcModelConfig().apply { model = modelFile.absolutePath }
-                            tokens    = tokensFile.absolutePath
-                            numThreads = this@ModelManager.numThreads
-                            provider  = "cpu"
+                Log.d(TAG, "Instantiating native OfflineRecognizer for $lang | model: ${modelFile.absolutePath} (${modelFile.length()} bytes) | tokens: ${tokensFile.absolutePath} (${tokensFile.length()} bytes)")
+
+                try {
+                    val recognizer = OfflineRecognizer(
+                        assetManager = null,
+                        config = OfflineRecognizerConfig().apply {
+                            modelConfig = OfflineModelConfig().apply {
+                                nemo = OfflineNemoEncDecCtcModelConfig().apply { model = modelFile.absolutePath }
+                                tokens    = tokensFile.absolutePath
+                                numThreads = this@ModelManager.numThreads
+                                provider  = "cpu"
+                            }
+                            decodingMethod = "greedy_search"
                         }
-                        decodingMethod = "greedy_search"
-                    }
-                )
-
-                currentSttRecognizer = recognizer
-                currentSttLang = lang
-                _sttState.value = ModelState.Ready
-                Log.d(TAG, "STT model READY for $lang")
-                recognizer
-
+                    )
+                    currentSttRecognizer = recognizer
+                    currentSttLang = lang
+                    _sttState.value = ModelState.Ready
+                    Log.d(TAG, "STT model successfully loaded and READY for $lang")
+                    recognizer
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    Log.e(TAG, "Failed to load STT model for $lang", e)
+                    currentSttRecognizer = null
+                    _sttState.value = ModelState.Error("Native load failed: ${e.message}")
+                    null
+                }
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load STT model for $lang", e)
-                _sttState.value = ModelState.Error(e.message ?: "Unknown error")
+            } catch (e: Throwable) {
+                Log.e(TAG, "Error in loadSttModel for $lang", e)
+                _sttState.value = ModelState.Error("STT load error: ${e.message}")
                 null
             }
         }
@@ -266,7 +293,17 @@ class ModelManager(private val context: Context) {
                 val modelFile = if (config.ttsSharedModelId != null) downloader.sharedModelFile(config.ttsSharedModelId, "model.onnx") else downloader.modelFile("tts", lang, "model.onnx")
                 val tokensFile = if (config.ttsSharedModelId != null) downloader.sharedModelFile(config.ttsSharedModelId, "tokens.txt") else downloader.modelFile("tts", lang, "tokens.txt")
 
-                if (!modelFile.exists() || modelFile.length() == 0L) {
+                // Remove stale/corrupted files
+                if (modelFile.exists() && !downloader.isValidFile(modelFile)) {
+                    Log.w(TAG, "Purging invalid/corrupted TTS model file: ${modelFile.absolutePath} (${modelFile.length()} bytes)")
+                    modelFile.delete()
+                }
+                if (tokensFile.exists() && !downloader.isValidFile(tokensFile)) {
+                    Log.w(TAG, "Purging invalid/corrupted TTS tokens file: ${tokensFile.absolutePath} (${tokensFile.length()} bytes)")
+                    tokensFile.delete()
+                }
+
+                if (!downloader.isValidFile(modelFile)) {
                     _ttsState.value = ModelState.Downloading(0)
                     Log.d(TAG, "Downloading TTS model for $lang from ${config.ttsModelUrl}")
                     downloader.downloadSync(config.ttsModelUrl, modelFile) { dl, total ->
@@ -274,19 +311,20 @@ class ModelManager(private val context: Context) {
                     }
                 }
 
-                if (config.ttsTokensUrl != null && (!tokensFile.exists() || tokensFile.length() == 0L)) {
-                    Log.d(TAG, "Downloading TTS tokens for $lang")
+                if (config.ttsTokensUrl != null && !downloader.isValidFile(tokensFile)) {
+                    Log.d(TAG, "Downloading TTS tokens for $lang from ${config.ttsTokensUrl}")
                     downloader.downloadSync(config.ttsTokensUrl, tokensFile)
                 }
 
                 _ttsState.value = ModelState.Loading
 
-                try { currentTtsEngine?.release() } catch (e: Exception) { Log.w(TAG, "release old TTS: ${e.message}") }
+                try { currentTtsEngine?.release() } catch (e: Throwable) { Log.w(TAG, "release old TTS: ${e.message}") }
                 currentTtsEngine = null
                 currentTtsLang = null
                 currentTtsSharedModelId = null
 
-                Log.d(TAG, "Creating OfflineTts for $lang")
+                Log.d(TAG, "Instantiating native OfflineTts for $lang | model: ${modelFile.absolutePath} (${modelFile.length()} bytes) | tokens: ${tokensFile.absolutePath} (${tokensFile.length()} bytes)")
+
                 val tts = OfflineTts(
                     assetManager = null,
                     config = OfflineTtsConfig().apply {
@@ -312,9 +350,9 @@ class ModelManager(private val context: Context) {
 
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load TTS model for $lang", e)
-                _ttsState.value = ModelState.Error(e.message ?: "Unknown error")
+            } catch (t: Throwable) {
+                Log.e(TAG, "Failed to load/instantiate TTS model for $lang: ${t.message}", t)
+                _ttsState.value = ModelState.Error(t.message ?: "Native TTS initialization error")
                 null
             }
         }
