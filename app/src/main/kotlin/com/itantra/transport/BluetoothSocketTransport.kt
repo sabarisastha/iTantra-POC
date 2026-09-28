@@ -25,6 +25,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import com.itantra.transport.binary.BinaryDecoder
+import com.itantra.transport.binary.BinaryEncoder
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -214,6 +216,14 @@ class BluetoothSocketTransport(
                 break
             }
             when (frame.first) {
+                FrameType.BINARY_PAYLOAD -> {
+                    val payload = BinaryDecoder.decode(frame.second)?.copy(receivedTimestampMs = System.currentTimeMillis())
+                    if (payload != null) {
+                        _onPayloadReceived.emit(payload)
+                    } else {
+                        Log.e(TAG, "Binary decode failed for frame size=${frame.second.size}")
+                    }
+                }
                 FrameType.JSON_PAYLOAD -> {
                     val str = String(frame.second, Charsets.UTF_8)
                     runCatching {
@@ -237,8 +247,8 @@ class BluetoothSocketTransport(
 
     override suspend fun send(payload: Payload) {
         val socket = framedSocket ?: throw IllegalStateException("Not connected")
-        val encoded = json.encodeToString(payload).toByteArray(Charsets.UTF_8)
-        socket.writeFrame(FrameType.JSON_PAYLOAD, encoded)
+        val encoded = BinaryEncoder.encode(payload)
+        socket.writeFrame(FrameType.BINARY_PAYLOAD, encoded)
     }
 
     override suspend fun sendPcm(pcm: FloatArray) {

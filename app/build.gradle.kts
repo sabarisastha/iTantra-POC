@@ -54,6 +54,29 @@ android {
         jniLibs.pickFirsts.add("**/libonnxruntime.so")
         jniLibs.pickFirsts.add("**/libsherpa-onnx-core.so")
     }
+
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
+        }
+    }
+}
+
+afterEvaluate {
+    tasks.register<JavaExec>("runBinaryTest") {
+        dependsOn("compileDebugUnitTestKotlin")
+        mainClass.set("org.junit.runner.JUnitCore")
+        val kotlinTestClasses = layout.buildDirectory.dir("tmp/kotlin-classes/debugUnitTest")
+        val appClasses = layout.buildDirectory.dir("intermediates/javac/debug/compileDebugJavaWithJavac/classes")
+        val kotlinAppClasses = layout.buildDirectory.dir("tmp/kotlin-classes/debug")
+        classpath = files(
+            kotlinTestClasses,
+            appClasses,
+            kotlinAppClasses,
+            configurations.getByName("debugUnitTestRuntimeClasspath")
+        )
+        args("com.itantra.transport.binary.BinaryProtocolTest")
+    }
 }
 
 dependencies {
