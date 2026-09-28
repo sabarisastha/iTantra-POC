@@ -1441,13 +1441,20 @@ class AudioPlayer {
             isPlaying
         ) {
 
-            val written =
+            val written = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
                 track.write(
                     data,
                     offset,
                     data.size - offset,
                     AudioTrack.WRITE_BLOCKING
                 )
+            } else {
+                track.write(
+                    data,
+                    offset,
+                    data.size - offset
+                )
+            }
 
             when {
 

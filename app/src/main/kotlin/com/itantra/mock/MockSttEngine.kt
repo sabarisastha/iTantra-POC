@@ -120,17 +120,28 @@ class MockSttEngine(
 
         val recorder: AudioRecord
         try {
-            recorder = AudioRecord.Builder()
-                .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                        .setSampleRate(sampleRate)
-                        .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                        .build()
+            recorder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                AudioRecord.Builder()
+                    .setAudioSource(MediaRecorder.AudioSource.VOICE_RECOGNITION)
+                    .setAudioFormat(
+                        AudioFormat.Builder()
+                            .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                            .setSampleRate(sampleRate)
+                            .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
+                            .build()
+                    )
+                    .setBufferSizeInBytes(bufBytes)
+                    .build()
+            } else {
+                @Suppress("DEPRECATION")
+                AudioRecord(
+                    MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                    sampleRate,
+                    AudioFormat.CHANNEL_IN_MONO,
+                    AudioFormat.ENCODING_PCM_16BIT,
+                    bufBytes
                 )
-                .setBufferSizeInBytes(bufBytes)
-                .build()
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Exception initializing AudioRecord", e)
             shouldCapture = false
@@ -160,7 +171,11 @@ class MockSttEngine(
 
         try {
             while (shouldCapture) {
-                val read = recorder.read(shortBuf, 0, frameSamples, AudioRecord.READ_BLOCKING)
+                val read = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    recorder.read(shortBuf, 0, frameSamples, AudioRecord.READ_BLOCKING)
+                } else {
+                    recorder.read(shortBuf, 0, frameSamples)
+                }
                 if (read < frameSamples) continue
 
                 // ── Run Silero VAD on 512-sample frame ────────────────────────

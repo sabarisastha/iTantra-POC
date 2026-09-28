@@ -76,7 +76,7 @@ class DutyCycleScheduler(
     fun getBatteryLevel(): Int {
         return try {
             val ctx = context ?: return 100
-            val bm = ctx.getSystemService(BatteryManager::class.java)
+            val bm = ctx.getSystemService(android.content.Context.BATTERY_SERVICE) as? BatteryManager
             val cap = bm?.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY) ?: 100
             if (cap in 0..100) cap else 100
         } catch (e: Exception) {

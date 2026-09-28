@@ -198,7 +198,11 @@ class ModelDownloader(private val context: Context) {
                     throw Exception("HTTP $responseCode for ${destFile.name}")
                 }
 
-                val totalBytes = conn.contentLengthLong
+                val totalBytes = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                    conn.contentLengthLong
+                } else {
+                    conn.contentLength.toLong()
+                }
                 var downloadedBytes = 0L
                 var maxEmittedProgress = 0
 
