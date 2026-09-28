@@ -62,6 +62,7 @@ fun SessionScreen(
     val entries         by vm.transcript.collectAsStateWithLifecycle()
     val language        by vm.selectedLanguage.collectAsStateWithLifecycle()
     val connectionState by vm.connectionState.collectAsStateWithLifecycle()
+    val micError        by vm.micError.collectAsStateWithLifecycle()
 
     var latencyExpanded by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -164,6 +165,45 @@ fun SessionScreen(
 
             // ── Half-Duplex Floor Status Banner ──────────────────────────────
             FloorStatusBanner(mode = mode, floorState = floorState)
+
+            // ── Microphone Error Banner ──────────────────────────────────────
+            AnimatedVisibility(visible = micError != null) {
+                micError?.let { errText ->
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(
+                                Icons.Default.MicOff,
+                                contentDescription = "Microphone Error",
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                            )
+                            Text(
+                                text = errText,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.weight(1f),
+                            )
+                            IconButton(onClick = { vm.clearMicError() }) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Dismiss Error",
+                                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
 
             // ── Walkie-Talkie PTT Button (only in PTT mode) ───────────────────
             AnimatedVisibility(visible = mode == SessionMode.PTT) {

@@ -44,11 +44,10 @@ class iTantraApplication : Application() {
     }
 
     /**
-     * TTS Engine — using Android System default TextToSpeech engine.
-     * Local ONNX / RASA TTS plugin is bypassed per user request.
+     * TTS Engine — IndicParlerTtsEngine (RASA / VITS ONNX wrapper).
      */
     val ttsEngine: com.itantra.tts.TextToSpeechEngine by lazy {
-        com.itantra.tts.AndroidTtsEngine(this)
+        com.itantra.tts.IndicParlerTtsEngine(this, modelManager)
     }
 
     /**

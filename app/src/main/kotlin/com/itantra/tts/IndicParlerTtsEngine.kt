@@ -6,17 +6,19 @@ import com.itantra.audio.AudioPlayer
 import com.itantra.audio.PcmChunk
 import com.itantra.model.ModelManager
 import com.itantra.model.ModelState
-import com.itantra.mock.MockTtsEngine
 import com.itantra.stt.RecognizedSentence
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.coroutineContext
 
 private const val TAG = "IndicParlerTtsEngine"
@@ -40,8 +42,8 @@ class IndicParlerTtsEngine(
     private val replayLock =
         Any()
 
-    private val fallbackSystemTts =
-        MockTtsEngine(context)
+    private val fallbackSystemTts: TextToSpeechEngine =
+        AndroidTtsEngine(context)
 
     private val replayCache =
         object :
@@ -280,7 +282,7 @@ class IndicParlerTtsEngine(
 
             Log.w(
                 TAG,
-                "[TTS] acquireTtsForInference() returned null"
+                "[TTS] acquireTtsForInference() returned null — fresh load or model error"
             )
 
             playSystemTtsFallback(
@@ -292,6 +294,11 @@ class IndicParlerTtsEngine(
             )
 
             return
+        } else {
+            Log.d(
+                TAG,
+                "[TTS] acquireTtsForInference() CACHE HIT — ONNX TTS session warm (lang=$expectedLanguage)"
+            )
         }
 
         try {
@@ -389,12 +396,26 @@ class IndicParlerTtsEngine(
                     val chunkStart =
                         System.currentTimeMillis()
 
-                    val generated =
+                    val generated = if (chunkNumber == 1) {
+                        /*
+                         * Watchdog: Chunk 1 must produce audio within 1200ms budget.
+                         * If exceeded, withTimeout throws TimeoutCancellationException,
+                         * triggering immediate fallback to Android TTS.
+                         */
+                        withTimeout(1200L) {
+                            acquiredTts.generate(
+                                segment,
+                                speakerId,
+                                1.0f
+                            )
+                        }
+                    } else {
                         acquiredTts.generate(
                             segment,
                             speakerId,
                             1.0f
                         )
+                    }
 
                     val chunkTime =
                         System.currentTimeMillis() -
@@ -530,6 +551,32 @@ class IndicParlerTtsEngine(
 
             } catch (e: CancellationException) {
 
+                if (e is TimeoutCancellationException) {
+                    Log.w(
+                        TAG,
+                        "[TTS] Watchdog cancellation caught; switching to Android TTS fallback"
+                    )
+
+                    try {
+                        pcmChannel.close()
+                    } catch (_: Throwable) {
+                    }
+
+                    playbackJob.cancelAndJoin()
+
+                    audioPlayer.stop()
+
+                    playSystemTtsFallback(
+                        sentence,
+                        expectedLanguage,
+                        t0,
+                        t1,
+                        t2
+                    )
+
+                    return
+                }
+
                 Log.d(
                     TAG,
                     "[TTS] Streaming synthesis cancelled"
@@ -658,33 +705,63 @@ class IndicParlerTtsEngine(
             return
         }
 
+        val lang = languageCode.ifBlank { "hi" }
+
         scope.launch(Dispatchers.Default) {
 
             try {
+                val prewarmStart = System.currentTimeMillis()
+                Log.d(
+                    TAG,
+                    "[TTS] Prewarm started for language=$lang"
+                )
 
-                if (
-                    modelManager.currentTtsLang !=
-                    languageCode ||
-                    modelManager.getTtsEngine() == null
-                ) {
+                val tts =
+                    modelManager.loadTtsModel(lang)
 
-                    Log.d(
-                        TAG,
-                        "[TTS] Prewarming TTS model " +
-                                "language=$languageCode"
-                    )
-
-                    modelManager.loadTtsModel(
-                        languageCode
-                    )
-                }
+                val sampleRate =
+                    tts?.sampleRate() ?: 24000
 
                 /*
-                 * Prewarm the audio path as well.
+                 * Prewarm the audio path with exact model sample rate.
                  */
                 audioPlayer.prewarm(
-                    sampleRate = 22050,
+                    sampleRate = sampleRate,
                     isAlert = false
+                )
+
+                /*
+                 * Run 1 dummy inference to prime ONNX Runtime memory pools,
+                 * thread dispatchers, and raise CPU frequency governor.
+                 */
+                if (tts != null) {
+                    val acquired =
+                        modelManager.acquireTtsForInference()
+
+                    if (acquired != null) {
+                        try {
+                            val dummyStart = System.currentTimeMillis()
+                            acquired.generate(
+                                ".",
+                                modelManager.currentTtsSpeakerId,
+                                1.0f
+                            )
+                            Log.d(
+                                TAG,
+                                "[TTS] Prewarm dummy inference took=" +
+                                        "${System.currentTimeMillis() - dummyStart}ms"
+                            )
+                        } finally {
+                            modelManager.releaseTtsForInference()
+                        }
+                    }
+                }
+
+                Log.d(
+                    TAG,
+                    "[TTS] Prewarm completed for lang=$lang in " +
+                            "${System.currentTimeMillis() - prewarmStart}ms " +
+                            "(sampleRate=$sampleRate)"
                 )
 
             } catch (e: Throwable) {
@@ -806,4 +883,76 @@ class IndicParlerTtsEngine(
         val sampleRate: Int,
         val isAlert: Boolean
     )
+
+    // -------------------------------------------------------------------------
+    // PHASE 0 — ISOLATED TTS BENCHMARK (debug only)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Runs a pure synthesis benchmark with no network, STT, floor control,
+     * or audio playback involved.
+     *
+     * Loads the model for [lang], then runs [tts.generate()] [runs] times
+     * on the same [text], logging per-run:
+     *   TTS_ISO run=N gen=Xms samples=Y RTF=Z
+     *
+     * Call from an ADB broadcast receiver or debug button.
+     */
+    fun runIsolatedBenchmark(
+        lang: String = "hi",
+        text: String = "हम आपात स्थिति में हैं",
+        runs: Int = 5,
+        threads: Int? = null
+    ) {
+        scope.launch(Dispatchers.Default) {
+            Log.i("TTS_ISO", "=== ISOLATED TTS BENCHMARK START ===")
+            if (threads != null && threads > 0 && threads != modelManager.numThreads) {
+                Log.i("TTS_ISO", "Switching threads from ${modelManager.numThreads} to $threads")
+                modelManager.numThreads = threads
+                modelManager.unloadTts()
+            }
+            Log.i("TTS_ISO", "lang=$lang text=\"$text\" runs=$runs threads=${modelManager.numThreads}")
+
+            // 1. Load model
+            val loadStart = System.currentTimeMillis()
+            val tts = modelManager.loadTtsModel(lang)
+            val loadMs = System.currentTimeMillis() - loadStart
+            Log.i("TTS_ISO", "MODEL_LOAD took=${loadMs}ms")
+
+            if (tts == null) {
+                Log.e("TTS_ISO", "ABORT — loadTtsModel($lang) returned null")
+                return@launch
+            }
+
+            val speakerId = modelManager.currentTtsSpeakerId
+            val sampleRate = tts.sampleRate()
+            Log.i("TTS_ISO", "sampleRate=$sampleRate speakerId=$speakerId")
+
+            // 2. Acquire for inference
+            val acquired = modelManager.acquireTtsForInference()
+            if (acquired == null) {
+                Log.e("TTS_ISO", "ABORT — acquireTtsForInference() returned null")
+                return@launch
+            }
+
+            try {
+                for (run in 1..runs) {
+                    val genStart = System.currentTimeMillis()
+                    val result = acquired.generate(text, speakerId, 1.0f)
+                    val genMs = System.currentTimeMillis() - genStart
+                    val samples = result.samples.size
+                    val audioDurationMs = if (sampleRate > 0) (samples * 1000L) / sampleRate else 0L
+                    val rtf = if (audioDurationMs > 0) genMs.toFloat() / audioDurationMs else 0f
+                    Log.i(
+                        "TTS_ISO",
+                        "run=$run gen=${genMs}ms samples=$samples audio=${audioDurationMs}ms RTF=${"%.3f".format(rtf)}"
+                    )
+                }
+            } finally {
+                modelManager.releaseTtsForInference()
+            }
+
+            Log.i("TTS_ISO", "=== ISOLATED TTS BENCHMARK END ===")
+        }
+    }
 }

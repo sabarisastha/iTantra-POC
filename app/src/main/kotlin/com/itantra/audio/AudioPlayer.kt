@@ -1101,14 +1101,14 @@ class AudioPlayer {
                                 "buffered=${bufferedMs}ms)"
                     )
 
-                    if (
-                        bufferedMs >=
-                        initialPrebufferMs ||
-                        pendingChunks.size >= 2
-                    ) {
-                        startPlaybackIfNeeded()
-                    }
-
+                    /*
+                     * Start playback immediately on the FIRST chunk.
+                     *
+                     * Do NOT wait for a second chunk or 300ms prebuffer.
+                     * Progressive streaming synthesizes remaining chunks
+                     * in parallel while chunk 1 is already playing.
+                     */
+                    startPlaybackIfNeeded()
                     continue
                 }
 

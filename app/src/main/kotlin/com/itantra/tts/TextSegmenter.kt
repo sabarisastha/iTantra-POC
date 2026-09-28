@@ -5,11 +5,18 @@ package com.itantra.tts
  * for progressive low-latency TTS.
  *
  * Design goals:
- * - Avoid extremely tiny TTS chunks.
- * - Keep the first chunk large enough to reduce playback underruns.
- * - Preserve natural punctuation.
+ * - Force real chunking on typical short/medium PTT phrases (3-10 words),
+ *   since STT output has NO punctuation and the previous thresholds
+ *   (skip-split under 5 words, ~9-word first chunk target) meant most
+ *   real walkie-talkie utterances collapsed into ONE chunk — silently
+ *   defeating the progressive-streaming architecture and reproducing
+ *   the full monolithic-synthesis delay this system was built to avoid.
+ * - Keep the first chunk small (~4 words) so first-audio latency is
+ *   driven by a small chunk's inference time, not the whole sentence.
+ * - Preserve natural punctuation splitting when present.
  * - Avoid splitting on commas because comma-based chunks can become too short.
  * - Keep conjunctions attached to the preceding clause when possible.
+ * - Only re-merge chunks that are genuinely too tiny to stand alone (1-2 words).
  */
 object TextSegmenter {
 
@@ -122,14 +129,22 @@ object TextSegmenter {
         "കൂടാതെ"
     )
 
-    private const val SHORT_CHUNK_WORD_LIMIT = 5
-    private const val FIRST_CHUNK_TARGET_WORDS = 9
-    private const val FIRST_CONJUNCTION_SEARCH_START = 4
-    private const val FIRST_CONJUNCTION_SEARCH_END = 9
+    // Only sentences shorter than 3 words stay as a single chunk
+    var minWordsToSplit = 3
 
-    private const val REMAINING_TARGET_WORDS = 11
-    private const val REMAINING_CONJUNCTION_SEARCH_START = 7
-    private const val REMAINING_CONJUNCTION_SEARCH_END = 14
+    // First chunk target is 2 words so first-audio latency is
+    // driven by synthesizing only ~2 words (~320ms on device).
+    var firstChunkTargetWords = 2
+    var firstConjunctionSearchStart = 2
+    var firstConjunctionSearchEnd = 3
+
+    // Remaining chunks target ~5 words
+    var remainingTargetWords = 5
+    var remainingConjunctionSearchStart = 3
+    var remainingConjunctionSearchEnd = 6
+
+    // Only merge chunks that are truly single orphan words (<= 1 word).
+    var shortChunkWordLimit = 1
 
     /**
      * Main segmentation entry point.
@@ -180,11 +195,14 @@ object TextSegmenter {
 
     /**
      * Segments text that doesn't contain a usable sentence delimiter.
+     *
+     * This is the path essentially ALL real-time STT output takes, since
+     * ASR models emit raw text with no punctuation.
      */
     private fun segmentUnpunctuated(text: String): List<String> {
         val words = wordsOf(text)
 
-        if (words.size <= 5) {
+        if (words.size < minWordsToSplit) {
             return listOf(text.trim())
         }
 
@@ -195,20 +213,20 @@ object TextSegmenter {
         /*
          * First chunk:
          *
-         * Target around 9 words.
+         * Target around 2 words.
          *
          * Search for a conjunction so we can finish the first chunk
          * at a reasonably natural semantic boundary.
          */
         val firstSearchStart =
             minOf(
-                FIRST_CONJUNCTION_SEARCH_START,
+                firstConjunctionSearchStart,
                 words.lastIndex
             )
 
         val firstSearchEnd =
             minOf(
-                FIRST_CONJUNCTION_SEARCH_END,
+                firstConjunctionSearchEnd,
                 words.lastIndex
             )
 
@@ -218,13 +236,6 @@ object TextSegmenter {
             val normalized = normalizeWord(words[i])
 
             if (normalized in CONJUNCTIONS) {
-                /*
-                 * Include the conjunction in the preceding chunk.
-                 *
-                 * This avoids starting a new TTS chunk with:
-                 *
-                 * "and ..."
-                 */
                 firstEndExclusive = i + 1
                 break
             }
@@ -233,7 +244,7 @@ object TextSegmenter {
         if (firstEndExclusive <= 0) {
             firstEndExclusive =
                 minOf(
-                    FIRST_CHUNK_TARGET_WORDS,
+                    firstChunkTargetWords,
                     words.size
                 )
         }
@@ -249,19 +260,19 @@ object TextSegmenter {
         /*
          * Remaining chunks.
          */
-        while (words.size - start > REMAINING_TARGET_WORDS) {
+        while (words.size - start > remainingTargetWords) {
 
             val remainingCount = words.size - start
 
             val searchStart =
                 minOf(
-                    REMAINING_CONJUNCTION_SEARCH_START,
+                    remainingConjunctionSearchStart,
                     remainingCount - 1
                 )
 
             val searchEnd =
                 minOf(
-                    REMAINING_CONJUNCTION_SEARCH_END,
+                    remainingConjunctionSearchEnd,
                     remainingCount - 1
                 )
 
@@ -282,7 +293,7 @@ object TextSegmenter {
             if (nextEndExclusive <= start) {
                 nextEndExclusive =
                     minOf(
-                        start + REMAINING_TARGET_WORDS,
+                        start + remainingTargetWords,
                         words.size
                     )
             }
@@ -308,8 +319,9 @@ object TextSegmenter {
     }
 
     /**
-     * Prevent extremely short chunks from becoming independent
-     * playback streams.
+     * Prevent extremely short chunks (1-2 words) from becoming independent
+     * playback streams. Chunks of 3+ words are left alone — merging those
+     * back together would undo the whole point of this fix.
      */
     private fun mergeShortSegments(
         segments: List<String>
@@ -328,7 +340,7 @@ object TextSegmenter {
 
             val pendingWords = wordsOf(pending).size
 
-            if (pendingWords < SHORT_CHUNK_WORD_LIMIT) {
+            if (pendingWords <= shortChunkWordLimit) {
                 pending = "$pending $current".trim()
             } else {
                 result += pending
@@ -339,7 +351,7 @@ object TextSegmenter {
         if (pending.isNotEmpty()) {
             if (
                 result.isNotEmpty() &&
-                wordsOf(pending).size < SHORT_CHUNK_WORD_LIMIT
+                wordsOf(pending).size <= shortChunkWordLimit
             ) {
                 result[result.lastIndex] =
                     "${result.last()} $pending".trim()

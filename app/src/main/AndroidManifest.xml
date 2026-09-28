@@ -90,5 +90,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Debug-only ADB benchmark receiver -->
+        <receiver
+            android:name="com.itantra.debug.TtsBenchmarkReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.itantra.action.TTS_BENCHMARK" />
+                <action android:name="com.itantra.action.TTS_PREWARM" />
+                <action android:name="com.itantra.action.TTS_SPEAK" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

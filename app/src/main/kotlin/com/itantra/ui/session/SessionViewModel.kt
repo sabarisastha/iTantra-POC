@@ -19,6 +19,7 @@ class SessionViewModel(
     val transcript:       StateFlow<List<TranscriptEntry>> = sessionController.transcript
     val selectedLanguage: StateFlow<SupportedLanguage>     = sessionController.selectedLanguage
     val connectionState:  StateFlow<ConnectionState>       = sessionController.transport.connectionState
+    val micError:         StateFlow<String?>               = sessionController.micError
 
     fun setMode(mode: SessionMode)            = sessionController.setMode(mode)
     fun setLanguage(lang: SupportedLanguage)  = sessionController.setLanguage(lang)
@@ -27,6 +28,7 @@ class SessionViewModel(
     fun triggerAlert(latitude: Double? = null, longitude: Double? = null) = sessionController.triggerAlert(latitude, longitude)
     fun replayReceivedAudio(sequenceId: Int): Boolean = sessionController.replayReceivedAudio(sequenceId)
     fun disconnect()                          = sessionController.disconnect()
+    fun clearMicError()                       = sessionController.clearMicError()
 
     companion object {
         fun factory(sessionController: SessionController) = object : ViewModelProvider.Factory {

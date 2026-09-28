@@ -17,6 +17,8 @@ class AudioRecorder {
         private const val TAG = "ITAN-AUDIO-REC"
         private const val CHANNEL = AudioFormat.CHANNEL_IN_MONO
         private const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
+        private const val RETRY_DELAY_MS = 80L
+        private const val MAX_RETRIES_PER_SOURCE = 3
     }
 
     private var audioRecord: AudioRecord? = null
@@ -28,8 +30,8 @@ class AudioRecorder {
     fun startRecording(
         audioSource: Int = MediaRecorder.AudioSource.VOICE_COMMUNICATION,
         onChunk: (FloatArray) -> Unit
-    ) {
-        startRecordingInternal(audioSource) { shortBuf, read ->
+    ): Boolean {
+        return startRecordingInternal(audioSource) { shortBuf, read ->
             val floatChunk = FloatArray(read)
             for (i in 0 until read) {
                 floatChunk[i] = shortBuf[i] / 32768.0f
@@ -48,58 +50,97 @@ class AudioRecorder {
     fun startRecordingShorts(
         audioSource: Int = MediaRecorder.AudioSource.VOICE_COMMUNICATION,
         onChunk: (ShortArray) -> Unit
-    ) {
-        startRecordingInternal(audioSource) { shortBuf, read ->
+    ): Boolean {
+        return startRecordingInternal(audioSource) { shortBuf, read ->
             onChunk(if (read == shortBuf.size) shortBuf else shortBuf.copyOf(read))
         }
+    }
+
+    /**
+     * Attempts to open an [AudioRecord] on a single [source], retrying up to
+     * [MAX_RETRIES_PER_SOURCE] times with a short pause between attempts.
+     *
+     * This pause is what actually absorbs the Android HAL's mic-release race
+     * condition (~50-100ms after a previous AudioRecord/STT session releases
+     * the microphone). A single immediate attempt is not sufficient — that
+     * was the root cause of the previous intermittent "device B not audible"
+     * bug, where two back-to-back sources were tried with zero delay.
+     *
+     * NOTE: this runs on Dispatchers.IO (see startRecordingInternal call site),
+     * so a blocking Thread.sleep here is safe and does not block the UI thread.
+     */
+    @SuppressLint("MissingPermission")
+    private fun tryOpenAudioRecord(
+        source: Int,
+        bufSize: Int
+    ): AudioRecord? {
+        repeat(MAX_RETRIES_PER_SOURCE) { attempt ->
+            val recorder = AudioRecord(
+                source,
+                SAMPLE_RATE,
+                CHANNEL,
+                ENCODING,
+                bufSize
+            )
+
+            if (recorder.state == AudioRecord.STATE_INITIALIZED) {
+                if (attempt > 0) {
+                    Log.i(TAG, "INIT: source=$source succeeded on retry #$attempt")
+                }
+                return recorder
+            }
+
+            Log.w(TAG, "INIT: source=$source failed (attempt ${attempt + 1}/$MAX_RETRIES_PER_SOURCE)")
+            runCatching { recorder.release() }
+
+            if (attempt < MAX_RETRIES_PER_SOURCE - 1) {
+                Thread.sleep(RETRY_DELAY_MS)
+            }
+        }
+        return null
     }
 
     @SuppressLint("MissingPermission")
     private fun startRecordingInternal(
         audioSource: Int = MediaRecorder.AudioSource.VOICE_COMMUNICATION,
         onRawChunk: (ShortArray, Int) -> Unit
-    ) {
+    ): Boolean {
         if (recording) {
             Log.w(TAG, "START: Already recording, duplicate request ignored")
-            return
+            return true
         }
 
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING)
         val bufSize = maxOf(minBuf, 4096)
 
-        var recordSource = audioSource
-        var recorder = AudioRecord(
-            recordSource,
-            SAMPLE_RATE,
-            CHANNEL,
-            ENCODING,
-            bufSize
+        // Full three-way fallback chain: requested source -> MIC -> DEFAULT.
+        // Each source gets its own retry+delay loop via tryOpenAudioRecord.
+        // linkedSetOf preserves order and de-duplicates if audioSource is
+        // already MIC or DEFAULT.
+        val sourcesToTry = linkedSetOf(
+            audioSource,
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.DEFAULT
         )
 
-        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "INIT: AudioRecord failed to initialize with source $recordSource")
-            recorder.release()
-            if (recordSource != MediaRecorder.AudioSource.MIC) {
-                Log.w(TAG, "Retrying AudioRecord initialization with MediaRecorder.AudioSource.MIC fallback")
-                recordSource = MediaRecorder.AudioSource.MIC
-                recorder = AudioRecord(
-                    recordSource,
-                    SAMPLE_RATE,
-                    CHANNEL,
-                    ENCODING,
-                    bufSize
-                )
+        var recorder: AudioRecord? = null
+        var usedSource = -1
+
+        for (source in sourcesToTry) {
+            recorder = tryOpenAudioRecord(source, bufSize)
+            if (recorder != null) {
+                usedSource = source
+                break
             }
         }
 
-        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "INIT: AudioRecord failed to initialize with fallback source $recordSource")
-            recorder.release()
-            return
+        if (recorder == null) {
+            Log.e(TAG, "INIT: AudioRecord failed to initialize on ALL sources: $sourcesToTry")
+            return false
         }
 
         audioRecord = recorder
-        Log.i(TAG, "START: AudioRecord initialized successfully with source $recordSource")
+        Log.i(TAG, "START: AudioRecord initialized successfully with source $usedSource")
         audioRecord?.startRecording()
         recording = true
 
@@ -117,6 +158,7 @@ class AudioRecorder {
                 }
             }
         }
+        return true
     }
 
     fun stopRecording() {

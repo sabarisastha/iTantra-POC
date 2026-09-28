@@ -28,6 +28,8 @@ import java.util.UUID
 private const val TAG = "ITANTRA-SESSION"
 private const val MAX_TRANSCRIPT_ENTRIES = 200
 private const val FLOOR_TIMEOUT_MS = 15_000L
+private const val PHONE_TX_MAX_RETRIES = 3
+private const val PHONE_TX_RETRY_DELAY_MS = 300L
 
 /**
  * Orchestrates the Walkie-Talkie communication pipeline and Half-Duplex Floor Control / Full-Duplex Phone mode.
@@ -60,6 +62,16 @@ class SessionController(
     private val _sessionValidated = MutableStateFlow(false)
     val sessionValidated: StateFlow<Boolean> = _sessionValidated.asStateFlow()
 
+    /**
+     * Non-null when the local microphone could not be initialized on ANY
+     * fallback audio source (VOICE_COMMUNICATION / MIC / DEFAULT) after
+     * retries, in either PTT or Phone mode. The UI layer should observe
+     * this and show a visible error instead of leaving the user with
+     * silent, unexplained mic failure.
+     */
+    private val _micError = MutableStateFlow<String?>(null)
+    val micError: StateFlow<String?> = _micError.asStateFlow()
+
     @Volatile private var localFloorRequestTimestamp: Long = 0L
     @Volatile private var localModeChangeTimestamp: Long = 0L
     private var floorTimeoutJob: Job? = null
@@ -70,6 +82,7 @@ class SessionController(
     private var phoneAudioPlayer: com.itantra.audio.AudioPlayer? = null
     private var pcmSendChannel: Channel<FloatArray>? = null
     private var phoneTxJob: Job? = null
+    private var phoneTxRecorderRetryCount = 0
 
     // History and Metrics Tracking
     private var sessionStartMs: Long = 0L
@@ -89,7 +102,7 @@ class SessionController(
             var failedCount = 0
             while (true) {
                 delay(10_000L)
-                val result = runCatching { 
+                val result = runCatching {
                     transport.send(Payload(
                         type = PayloadType.CONTROL,
                         text = "HEARTBEAT",
@@ -211,6 +224,8 @@ class SessionController(
         floorTimeoutJob?.cancel()
         sttEngine.stop()
         stopPhoneModeAudio()
+        phoneTxRecorderRetryCount = 0
+        _micError.value = null
         _floorState.value = FloorState.IDLE
         _mode.value = SessionMode.PTT
         Log.d(TAG, "[ITANTRA-SESSION] session reset complete")
@@ -272,6 +287,8 @@ class SessionController(
 
     private fun startPhoneModeAudio() {
         Log.d(TAG, "[ITANTRA-PHONE] Starting independent TX & RX for PHONE mode")
+        phoneTxRecorderRetryCount = 0
+        _micError.value = null
         startPhoneRx()
         startPhoneTx()
     }
@@ -288,6 +305,22 @@ class SessionController(
         }
     }
 
+    /**
+     * Starts the Phone Mode TX (microphone capture + PCM send) path.
+     *
+     * IMPORTANT: AudioRecorder.startRecording() now returns Boolean —
+     * false means the mic failed to initialize on ALL fallback sources
+     * (VOICE_COMMUNICATION / MIC / DEFAULT). Previously this failure was
+     * completely silent: phoneAudioRecorder was assigned regardless, and
+     * the send-loop below just sat forever waiting for chunks that would
+     * never arrive, producing permanent, unexplained silence on that
+     * device while the peer (whose mic init succeeded) worked fine.
+     *
+     * This version checks the result, retries a bounded number of times
+     * (the HAL may still be mid-release from a previous STT/PTT session),
+     * and — if it still fails — surfaces the failure via [micError]
+     * instead of failing silently.
+     */
     private fun startPhoneTx() {
         if (phoneAudioRecorder != null) return
         Log.d(TAG, "[ITANTRA-PHONE] Starting TX stream")
@@ -302,10 +335,46 @@ class SessionController(
             if (_mode.value != SessionMode.PHONE || !isSessionActive()) return@launch
 
             val recorder = com.itantra.audio.AudioRecorder()
-            phoneAudioRecorder = recorder
-            recorder.startRecording { floatChunk ->
+            val started = recorder.startRecording { floatChunk ->
                 channel.trySend(floatChunk)
             }
+
+            if (!started) {
+                Log.e(
+                    "CALL",
+                    "[CALL][TX][ERROR] AudioRecord failed to initialize on ALL fallback " +
+                            "sources — mic unavailable on this device (attempt ${phoneTxRecorderRetryCount + 1})"
+                )
+
+                if (phoneTxRecorderRetryCount < PHONE_TX_MAX_RETRIES &&
+                    _mode.value == SessionMode.PHONE &&
+                    isSessionActive()
+                ) {
+                    phoneTxRecorderRetryCount++
+                    Log.w(
+                        "CALL",
+                        "[CALL][TX] Retrying mic init, attempt " +
+                                "$phoneTxRecorderRetryCount/$PHONE_TX_MAX_RETRIES"
+                    )
+                    delay(PHONE_TX_RETRY_DELAY_MS)
+                    phoneAudioRecorder = null
+                    startPhoneTx()
+                } else {
+                    Log.e(
+                        "CALL",
+                        "[CALL][TX][ERROR] Giving up on mic init after " +
+                                "$PHONE_TX_MAX_RETRIES retries — TX permanently silent this session"
+                    )
+                    phoneTxRecorderRetryCount = 0
+                    _micError.value =
+                        "Microphone unavailable — unable to transmit audio on this device"
+                }
+                return@launch
+            }
+
+            phoneTxRecorderRetryCount = 0
+            _micError.value = null
+            phoneAudioRecorder = recorder
 
             for (chunk in channel) {
                 if (_mode.value == SessionMode.PHONE && isSessionActive()) {
@@ -329,6 +398,7 @@ class SessionController(
         pcmSendChannel = null
         phoneAudioRecorder?.stopRecording()
         phoneAudioRecorder = null
+        phoneTxRecorderRetryCount = 0
     }
 
     private fun stopPhoneRx() {
@@ -343,6 +413,7 @@ class SessionController(
         }
         _selectedLanguage.value = language
         sttEngine.setLanguage(language.code)
+        ttsEngine.prewarm(language.code)
         Log.d(TAG, "[ITANTRA-SESSION] Language set to ${language.displayName} (${language.code})")
     }
 
@@ -375,12 +446,12 @@ class SessionController(
 
         scope.launch {
             sendControlPayload(PayloadType.REQUEST_FLOOR, timestamp = reqTime)
-            
+
             delay(5000L)
             if (_floorState.value == FloorState.WAITING_FOR_CHANNEL) {
                 Log.w(TAG, "[ITANTRA-PTT] Floor request timeout, retrying...")
                 sendControlPayload(PayloadType.REQUEST_FLOOR, timestamp = System.currentTimeMillis())
-                
+
                 delay(5000L)
                 if (_floorState.value == FloorState.WAITING_FOR_CHANNEL) {
                     Log.w(TAG, "[ITANTRA-PTT] Floor request retry failed, resetting to IDLE")
@@ -456,20 +527,26 @@ class SessionController(
 
     fun replayReceivedAudio(sequenceId: Int): Boolean = ttsEngine.replay(sequenceId)
 
+    /** Clears a previously reported microphone error, e.g. after the user dismisses it. */
+    fun clearMicError() {
+        _micError.value = null
+    }
+
     fun disconnect() {
         Log.d(TAG, "disconnect() from SessionController")
         floorTimeoutJob?.cancel()
 
         val wasTransmitting = _floorState.value == FloorState.LOCAL_TRANSMITTING ||
-                              _floorState.value == FloorState.WAITING_FOR_CHANNEL
+                _floorState.value == FloorState.WAITING_FOR_CHANNEL
 
         sttEngine.stop()
         stopPhoneModeAudio()
-        
+
         _floorState.value = FloorState.IDLE
         _mode.value = SessionMode.PTT
         _transcript.value = emptyList()
         _sessionValidated.value = false
+        _micError.value = null
 
         scope.launch {
             if (wasTransmitting) {
@@ -514,7 +591,7 @@ class SessionController(
         val payload = Payload(
             type            = if (sentence.isAlert) PayloadType.ALERT else PayloadType.SPEECH,
             text            = sentence.text,
-            languageCode    = sentence.languageCode,
+            languageCode    = sentence.languageCode.ifBlank { _selectedLanguage.value.code },
             sequenceId      = sentence.sequenceId,
             sentTimestampMs = sttCompleteMs,
             senderId        = localPeerId,
@@ -579,7 +656,7 @@ class SessionController(
                     }
                 }
         }
-        
+
         scope.launch(Dispatchers.IO) {
             transport.onPcmReceived
                 .catch { e -> Log.e(TAG, "Transport receive PCM flow error", e) }
@@ -743,7 +820,7 @@ class SessionController(
         val receivedMs = payload.receivedTimestampMs.takeIf { it > 0L } ?: System.currentTimeMillis()
         val sentence = RecognizedSentence(
             text         = payload.text,
-            languageCode = payload.languageCode,
+            languageCode = payload.languageCode.ifBlank { _selectedLanguage.value.code },
             isAlert      = payload.type == PayloadType.ALERT,
             timestampMs  = payload.sentTimestampMs,
             sequenceId   = payload.sequenceId,
@@ -751,7 +828,7 @@ class SessionController(
         )
 
         Log.d(TAG, "[PTT] SPEECH_RECEIVED seq=${payload.sequenceId} text='${payload.text}' delay_since_send=${System.currentTimeMillis() - payload.sentTimestampMs}ms")
-        
+
         val ttsStartedMs = System.currentTimeMillis()
         ttsEngine.speak(sentence)
 
