@@ -22,6 +22,7 @@ object BinaryProtocol {
     const val PROTOCOL_VERSION: Byte = 0x01
     const val HEADER_SIZE: Int = 18
     const val MAX_PAYLOAD_SIZE: Int = 512 * 1024 // 512 KB socket frame limit
+    const val MAX_TEXT_SIZE: Int = 65535         // 64 KB text length limit
 
     // Header Flags (Bitmask)
     const val FLAG_HAS_TEXT: Int        = 1 shl 0 // 0x01: Text section present
@@ -29,6 +30,7 @@ object BinaryProtocol {
     const val FLAG_HAS_LOCATION: Int    = 1 shl 2 // 0x04: Location section present
     const val FLAG_HAS_TELEMETRY: Int   = 1 shl 3 // 0x08: Telemetry section present
     const val FLAG_CUSTOM_LANG: Int     = 1 shl 4 // 0x10: Custom language string present
+    const val FLAG_TEXT_COMPRESSED: Int = 1 shl 5 // 0x20: Text section is DEFLATE-compressed
 
     // Location Sub-Flags (Bitmask)
     const val LOC_FLAG_COORDINATES: Int = 1 shl 0 // 0x01: Latitude & Longitude (16 bytes)

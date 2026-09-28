@@ -121,18 +121,46 @@ object BinaryDecoder {
         try {
             // 1. Text Section
             if ((flags and BinaryProtocol.FLAG_HAS_TEXT) != 0) {
-                if (buffer.remaining() < 2) {
-                    logW(TAG, "Truncated text length field")
-                    return null
+                val isCompressed = (flags and BinaryProtocol.FLAG_TEXT_COMPRESSED) != 0
+                if (isCompressed) {
+                    if (buffer.remaining() < 4) {
+                        logW(TAG, "Truncated compressed text header: remaining ${buffer.remaining()} < 4")
+                        return null
+                    }
+                    val compressedLen = buffer.short.toInt() and 0xFFFF
+                    val uncompressedLen = buffer.short.toInt() and 0xFFFF
+
+                    if (uncompressedLen > BinaryProtocol.MAX_TEXT_SIZE) {
+                        logW(TAG, "Uncompressed text length exceeds limit: $uncompressedLen > ${BinaryProtocol.MAX_TEXT_SIZE}")
+                        return null
+                    }
+                    if (buffer.remaining() < compressedLen) {
+                        logW(TAG, "Truncated compressed text body: remaining ${buffer.remaining()} < compressedLen $compressedLen")
+                        return null
+                    }
+                    val compressedBytes = ByteArray(compressedLen)
+                    buffer.get(compressedBytes)
+
+                    val decompressedBytes = DeflateCompressor.decompress(compressedBytes, uncompressedLen)
+                    if (decompressedBytes == null) {
+                        logW(TAG, "Failed to decompress DEFLATE text payload (malformed or corrupted data)")
+                        return null
+                    }
+                    text = String(decompressedBytes, Charsets.UTF_8)
+                } else {
+                    if (buffer.remaining() < 2) {
+                        logW(TAG, "Truncated text length field")
+                        return null
+                    }
+                    val textLen = buffer.short.toInt() and 0xFFFF
+                    if (buffer.remaining() < textLen) {
+                        logW(TAG, "Truncated text body: remaining ${buffer.remaining()} < textLen $textLen")
+                        return null
+                    }
+                    val tBytes = ByteArray(textLen)
+                    buffer.get(tBytes)
+                    text = String(tBytes, Charsets.UTF_8)
                 }
-                val textLen = buffer.short.toInt() and 0xFFFF
-                if (buffer.remaining() < textLen) {
-                    logW(TAG, "Truncated text body: remaining ${buffer.remaining()} < textLen $textLen")
-                    return null
-                }
-                val tBytes = ByteArray(textLen)
-                buffer.get(tBytes)
-                text = String(tBytes, Charsets.UTF_8)
             }
 
             // 2. Sender ID Section

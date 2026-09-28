@@ -17,9 +17,30 @@ object BinaryEncoder {
         val isCustomLang = (langId == BinaryProtocol.LANG_ID_CUSTOM && payload.languageCode.isNotBlank())
 
         var flags = 0
-        val textBytes = if (payload.text.isNotEmpty()) payload.text.toByteArray(Charsets.UTF_8) else null
-        if (textBytes != null && textBytes.isNotEmpty()) {
+        val rawTextBytes = if (payload.text.isNotEmpty()) payload.text.toByteArray(Charsets.UTF_8) else null
+        var textToSend: ByteArray? = null
+        var isTextCompressed = false
+        var originalTextLength = 0
+
+        if (rawTextBytes != null && rawTextBytes.isNotEmpty()) {
             flags = flags or BinaryProtocol.FLAG_HAS_TEXT
+            require(rawTextBytes.size <= BinaryProtocol.MAX_TEXT_SIZE) {
+                "Text length exceeds maximum of ${BinaryProtocol.MAX_TEXT_SIZE} bytes"
+            }
+            originalTextLength = rawTextBytes.size
+
+            val compressed = DeflateCompressor.compress(rawTextBytes)
+            // Uncompressed wire size: 2 bytes (len) + rawTextBytes.size
+            // Compressed wire size: 2 bytes (compressedLen) + 2 bytes (uncompressedLen) + compressed.size
+            // Adaptively compress ONLY when compressed representation + metadata is strictly smaller
+            if (compressed.size + 4 < rawTextBytes.size + 2) {
+                textToSend = compressed
+                isTextCompressed = true
+                flags = flags or BinaryProtocol.FLAG_TEXT_COMPRESSED
+            } else {
+                textToSend = rawTextBytes
+                isTextCompressed = false
+            }
         }
 
         val senderBytes = if (payload.senderId.isNotEmpty()) payload.senderId.toByteArray(Charsets.UTF_8) else null
@@ -49,10 +70,15 @@ object BinaryEncoder {
         val bodyOut = DataOutputStream(bodyStream)
 
         // 1. Text Section (if present)
-        if (textBytes != null && textBytes.isNotEmpty()) {
-            require(textBytes.size <= 0xFFFF) { "Text length exceeds 65535 bytes" }
-            bodyOut.writeShort(textBytes.size)
-            bodyOut.write(textBytes)
+        if (textToSend != null && textToSend.isNotEmpty()) {
+            if (isTextCompressed) {
+                bodyOut.writeShort(textToSend.size)       // 2 bytes: compressed byte length
+                bodyOut.writeShort(originalTextLength)     // 2 bytes: original uncompressed byte length
+                bodyOut.write(textToSend)                 // compressed bytes
+            } else {
+                bodyOut.writeShort(textToSend.size)       // 2 bytes: uncompressed byte length
+                bodyOut.write(textToSend)                 // raw UTF-8 bytes
+            }
         }
 
         // 2. Sender ID Section (if present)
