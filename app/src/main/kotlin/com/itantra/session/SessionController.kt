@@ -1,14 +1,25 @@
 package com.itantra.session
 
+import android.content.Context
 import android.util.Log
+import com.itantra.audio.DutyCycleInfo
+import com.itantra.audio.DutyCycleScheduler
 import com.itantra.stt.RecognizedSentence
 import com.itantra.stt.SpeechToTextEngine
+import com.itantra.telemetry.TelemetryState
 import com.itantra.transport.ConnectionState
 import com.itantra.transport.Payload
 import com.itantra.transport.PayloadType
 import com.itantra.transport.TransportChannel
+import com.itantra.transport.TransportKind
 import com.itantra.transport.TransportManager
 import com.itantra.tts.TextToSpeechEngine
+import com.itantra.utils.LiveLocationState
+import com.itantra.utils.LocationHelper
+import com.itantra.utils.LocationInfo
+import com.itantra.utils.MovementState
+import com.itantra.utils.MovementTracker
+import com.itantra.utils.RelativeDirection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -23,6 +34,9 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import com.itantra.transport.binary.BinaryEncoder
 import java.util.UUID
 
 private const val TAG = "ITANTRA-SESSION"
@@ -37,6 +51,7 @@ class SessionController(
     private val ttsEngine: TextToSpeechEngine,
     val transport: TransportChannel,
     private val historyDao: com.itantra.db.HistoryDao? = null,
+    private val context: Context? = null,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -59,6 +74,24 @@ class SessionController(
     /** True when a session handshake has succeeded with a remote peer. */
     private val _sessionValidated = MutableStateFlow(false)
     val sessionValidated: StateFlow<Boolean> = _sessionValidated.asStateFlow()
+
+    private val _telemetry = MutableStateFlow(TelemetryState())
+    val telemetry: StateFlow<TelemetryState> = _telemetry.asStateFlow()
+
+    private val _liveLocationState = MutableStateFlow(LiveLocationState())
+    val liveLocationState: StateFlow<LiveLocationState> = _liveLocationState.asStateFlow()
+
+    val dutyCycleScheduler: DutyCycleScheduler = DutyCycleScheduler(context)
+    val dutyCycleInfo: StateFlow<DutyCycleInfo> = dutyCycleScheduler.dutyCycleInfo
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    private fun getTransportTypeLabel(): String =
+        if ((transport as? TransportManager)?.activeKind?.value == TransportKind.WIFI_DIRECT) "WiFi" else "BT"
+
+    private val localMovementTracker = MovementTracker()
+    private val peerMovementTracker = MovementTracker()
+    private var locationSyncJob: Job? = null
 
     @Volatile private var localFloorRequestTimestamp: Long = 0L
     @Volatile private var localModeChangeTimestamp: Long = 0L
@@ -111,6 +144,106 @@ class SessionController(
         }
     }
 
+    private fun startLocationSync() {
+        locationSyncJob?.cancel()
+        locationSyncJob = scope.launch(Dispatchers.IO) {
+            // Initial sync immediately after handshake
+            syncLocalLocation()
+            while (isSessionActive()) {
+                delay(15_000L)
+                if (!isSessionActive()) break
+                syncLocalLocation()
+            }
+        }
+    }
+
+    private suspend fun syncLocalLocation() {
+        if (context == null) return
+        val result = LocationHelper.getCurrentLocation(context, timeoutMs = 2500L)
+        val loc = result.locationInfo ?: return
+        localMovementTracker.addFix(loc)
+        updateLiveLocationState(local = loc)
+        runCatching {
+            transport.send(
+                Payload(
+                    type = PayloadType.LOCATION_UPDATE,
+                    senderId = localPeerId,
+                    sentTimestampMs = System.currentTimeMillis(),
+                    latitude = loc.latitude,
+                    longitude = loc.longitude,
+                    accuracy = loc.accuracyMeters,
+                    locationTimestampMs = loc.timestampMs,
+                    locationStatus = "Location available",
+                )
+            )
+        }.onFailure { e ->
+            Log.w(TAG, "Failed to send LOCATION_UPDATE: ${e.message}")
+        }
+    }
+
+    private fun stopLocationSync() {
+        locationSyncJob?.cancel()
+        locationSyncJob = null
+        localMovementTracker.reset()
+        peerMovementTracker.reset()
+        _liveLocationState.value = LiveLocationState()
+    }
+
+    private fun updateLiveLocationState(
+        local: LocationInfo? = _liveLocationState.value.localLocation,
+        peer: LocationInfo? = _liveLocationState.value.peerLocation,
+        peerUpdateMs: Long = _liveLocationState.value.lastPeerUpdateMs,
+    ) {
+        val distance = if (local != null && peer != null) {
+            LocationHelper.calculateDistanceMeters(local.latitude, local.longitude, peer.latitude, peer.longitude)
+        } else null
+
+        val localBearing = localMovementTracker.currentBearing ?: local?.bearingDeg
+        val peerBearing = peerMovementTracker.currentBearing ?: peer?.bearingDeg
+
+        val relativeDir = LocationHelper.calculateRelativeDirection(
+            localBearing = localBearing,
+            peerBearing = peerBearing,
+            localState = localMovementTracker.currentState,
+            peerState = peerMovementTracker.currentState,
+        )
+
+        _liveLocationState.value = LiveLocationState(
+            localLocation = local,
+            peerLocation = peer,
+            distanceMeters = distance,
+            localMovementState = localMovementTracker.currentState,
+            peerMovementState = peerMovementTracker.currentState,
+            localBearingDeg = localBearing,
+            peerBearingDeg = peerBearing,
+            relativeDirection = relativeDir,
+            lastPeerUpdateMs = peerUpdateMs,
+        )
+    }
+
+    private fun handleIncomingLocationUpdate(payload: Payload) {
+        if (payload.latitude == null || payload.longitude == null) return
+        val peerLoc = LocationInfo(
+            latitude = payload.latitude,
+            longitude = payload.longitude,
+            accuracyMeters = payload.accuracy ?: 0f,
+            timestampMs = payload.locationTimestampMs ?: payload.sentTimestampMs,
+        )
+        peerMovementTracker.addFix(peerLoc)
+
+        val localLoc = context?.let { LocationHelper.getLocationInfo(it) }
+        if (localLoc != null) {
+            localMovementTracker.addFix(localLoc)
+        }
+
+        updateLiveLocationState(
+            local = localLoc ?: _liveLocationState.value.localLocation,
+            peer = peerLoc,
+            peerUpdateMs = System.currentTimeMillis(),
+        )
+        Log.d(TAG, "[ITANTRA-LOCATION] Received LOCATION_UPDATE from ${payload.senderId} (${peerLoc.latitude}, ${peerLoc.longitude})")
+    }
+
     private fun monitorConnectionState() {
         scope.launch {
             transport.connectionState.collect { state ->
@@ -129,6 +262,7 @@ class SessionController(
                         sttEngine.setLanguage(_selectedLanguage.value.code)
                         ttsEngine.prewarm(_selectedLanguage.value.code)
                         startHeartbeat()
+                        startLocationSync()
                         Log.d(TAG, "[ITANTRA-SESSION] state=CONNECTED — sending SESSION_INIT")
                         sendControlPayload(
                             PayloadType.CONTROL,
@@ -207,6 +341,7 @@ class SessionController(
 
     private fun onSessionLost() {
         heartbeatJob?.cancel()
+        stopLocationSync()
         _sessionValidated.value = false
         floorTimeoutJob?.cancel()
         sttEngine.stop()
@@ -271,9 +406,11 @@ class SessionController(
     }
 
     private fun startPhoneModeAudio() {
-        Log.d(TAG, "[ITANTRA-PHONE] Starting independent TX & RX for PHONE mode")
+        Log.d(TAG, "[ITANTRA-PHONE] Starting independent TX & RX for PHONE mode with DutyCycleScheduler")
         startPhoneRx()
-        startPhoneTx()
+        dutyCycleScheduler.startMonitoring(scope) {
+            startPhoneTx()
+        }
     }
 
     private fun startPhoneRx() {
@@ -290,7 +427,8 @@ class SessionController(
 
     private fun startPhoneTx() {
         if (phoneAudioRecorder != null) return
-        Log.d(TAG, "[ITANTRA-PHONE] Starting TX stream")
+        Log.d(TAG, "[ITANTRA-PHONE] Starting TX stream (voice active)")
+        dutyCycleScheduler.setPipelineActive(true)
 
         val channel = Channel<FloatArray>(capacity = 128, onBufferOverflow = BufferOverflow.DROP_OLDEST)
         pcmSendChannel = channel
@@ -299,17 +437,32 @@ class SessionController(
         phoneTxJob = scope.launch(Dispatchers.IO) {
             // Give Android AudioFlinger / HAL a 100ms window to cleanly release microphone if STT just stopped
             delay(100)
-            if (_mode.value != SessionMode.PHONE || !isSessionActive()) return@launch
+            if (_mode.value != SessionMode.PHONE || !isSessionActive()) {
+                dutyCycleScheduler.setPipelineActive(false)
+                return@launch
+            }
 
+            var silenceChunkCount = 0
             val recorder = com.itantra.audio.AudioRecorder()
             phoneAudioRecorder = recorder
-            val started = recorder.startRecording { floatChunk ->
+            recorder.startRecording { floatChunk ->
+                val rms = dutyCycleScheduler.calculateRms(floatChunk)
+                if (rms < DutyCycleScheduler.DEFAULT_RMS_THRESHOLD) {
+                    silenceChunkCount++
+                } else {
+                    silenceChunkCount = 0
+                }
+
                 channel.trySend(floatChunk)
-            }
-            if (!started) {
-                Log.e("CALL", "[CALL][TX][ERROR] Failed to initialize AudioRecorder for phone TX")
-                phoneAudioRecorder = null
-                return@launch
+
+                // ~1.5 seconds of sustained silence (~35 consecutive chunks depending on HAL buffer size)
+                if (silenceChunkCount > 35) {
+                    Log.d(TAG, "[ITANTRA-PHONE] Silence detected in TX stream — returning control to duty cycle scheduler")
+                    scope.launch(Dispatchers.Main) {
+                        stopPhoneTx()
+                        dutyCycleScheduler.setPipelineActive(false)
+                    }
+                }
             }
 
             for (chunk in channel) {
@@ -323,6 +476,7 @@ class SessionController(
 
     private fun stopPhoneModeAudio() {
         Log.d(TAG, "[ITANTRA-PHONE] Stopping TX & RX for PHONE mode")
+        dutyCycleScheduler.stop()
         stopPhoneTx()
         stopPhoneRx()
     }
@@ -414,8 +568,14 @@ class SessionController(
         }
     }
 
-    fun triggerAlert(latitude: Double? = null, longitude: Double? = null) {
-        Log.d(TAG, "triggerAlert(lat=$latitude, lon=$longitude)")
+    fun triggerAlert(
+        latitude: Double? = null,
+        longitude: Double? = null,
+        accuracy: Float? = null,
+        locationTimestampMs: Long? = null,
+        locationStatus: String? = null,
+    ) {
+        Log.d(TAG, "triggerAlert(lat=$latitude, lon=$longitude, acc=$accuracy, locTime=$locationTimestampMs, status=$locationStatus)")
         val lang = _selectedLanguage.value
         scope.launch {
             val sttCompleteMs = System.currentTimeMillis()
@@ -427,33 +587,56 @@ class SessionController(
                 sequenceId   = -1,
             )
             val payload = Payload(
-                type            = PayloadType.ALERT,
-                text            = sentence.text,
-                languageCode    = sentence.languageCode,
-                sequenceId      = sentence.sequenceId,
-                sentTimestampMs = sttCompleteMs,
-                senderId        = localPeerId,
-                latitude        = latitude,
-                longitude       = longitude
+                type                = PayloadType.ALERT,
+                text                = sentence.text,
+                languageCode        = sentence.languageCode,
+                sequenceId          = sentence.sequenceId,
+                sentTimestampMs     = sttCompleteMs,
+                senderId            = localPeerId,
+                latitude            = latitude,
+                longitude           = longitude,
+                accuracy            = accuracy,
+                locationTimestampMs = locationTimestampMs,
+                locationStatus      = locationStatus,
             )
             runCatching { transport.send(payload) }
                 .onFailure { e -> Log.e(TAG, "transport.send() alert failed", e) }
 
+            if (latitude != null && longitude != null) {
+                val localLoc = LocationInfo(
+                    latitude = latitude,
+                    longitude = longitude,
+                    accuracyMeters = accuracy ?: 0f,
+                    timestampMs = locationTimestampMs ?: sttCompleteMs,
+                )
+                localMovementTracker.addFix(localLoc)
+                updateLiveLocationState(local = localLoc)
+            }
+
             appendTranscript(
                 TranscriptEntry(
-                    direction          = Direction.SENT,
-                    text               = sentence.text,
-                    languageCode       = sentence.languageCode,
-                    isAlert            = sentence.isAlert,
-                    sequenceId         = sentence.sequenceId,
-                    sessionMode        = _mode.value,
-                    latitude           = latitude,
-                    longitude          = longitude,
-                    micPauseDetectedMs = sentence.timestampMs,
-                    sttCompleteMs      = sttCompleteMs,
-                    sentMs             = System.currentTimeMillis(),
-                    receivedMs         = 0L,
-                    ttsStartedMs       = 0L,
+                    direction           = Direction.SENT,
+                    text                = sentence.text,
+                    languageCode        = sentence.languageCode,
+                    isAlert             = sentence.isAlert,
+                    sequenceId          = sentence.sequenceId,
+                    sessionMode         = _mode.value,
+                    latitude            = latitude,
+                    longitude           = longitude,
+                    accuracy            = accuracy,
+                    locationTimestampMs = locationTimestampMs,
+                    locationStatus      = locationStatus,
+                    sttLatencyMs        = 0L,
+                    queueLatencyMs      = 0L,
+                    networkLatencyMs    = 0L,
+                    ttsLatencyMs        = 0L,
+                    totalE2eLatencyMs   = 0L,
+                    rtf                 = 0f,
+                    micPauseDetectedMs  = sentence.timestampMs,
+                    sttCompleteMs       = sttCompleteMs,
+                    sentMs              = System.currentTimeMillis(),
+                    receivedMs          = 0L,
+                    ttsStartedMs        = 0L,
                 )
             )
         }
@@ -464,6 +647,7 @@ class SessionController(
     fun disconnect() {
         Log.d(TAG, "disconnect() from SessionController")
         floorTimeoutJob?.cancel()
+        stopLocationSync()
 
         val wasTransmitting = _floorState.value == FloorState.LOCAL_TRANSMITTING ||
                               _floorState.value == FloorState.WAITING_FOR_CHANNEL
@@ -487,6 +671,7 @@ class SessionController(
     fun shutdown() {
         Log.d(TAG, "shutdown() from SessionController")
         heartbeatJob?.cancel()
+        stopLocationSync()
         floorTimeoutJob?.cancel()
         sttEngine.shutdown()
         ttsEngine.shutdown()
@@ -516,16 +701,34 @@ class SessionController(
 
     private suspend fun sendSentence(sentence: RecognizedSentence) {
         val sttCompleteMs = System.currentTimeMillis()
+        val sttLatency = if (sentence.sttLatencyMs > 0L) sentence.sttLatencyMs else (sttCompleteMs - sentence.timestampMs).coerceAtLeast(0L)
+        val rtfVal = sentence.rtf
+        val queueMs = (System.currentTimeMillis() - sttCompleteMs).coerceAtLeast(0L)
         val payload = Payload(
             type            = if (sentence.isAlert) PayloadType.ALERT else PayloadType.SPEECH,
             text            = sentence.text,
             languageCode    = sentence.languageCode,
             sequenceId      = sentence.sequenceId,
-            sentTimestampMs = sttCompleteMs,
+            sentTimestampMs = System.currentTimeMillis(),
             senderId        = localPeerId,
             latitude        = null,
-            longitude       = null
+            longitude       = null,
+            sttLatencyMs    = sttLatency,
+            senderQueueMs   = queueMs,
+            rtf             = rtfVal,
         )
+        val encodedBytes = runCatching { BinaryEncoder.encode(payload).size }.getOrDefault(0)
+
+        _telemetry.value = TelemetryState(
+            sttLatencyMs   = sttLatency,
+            ttsLatencyMs   = 0L,
+            rtf            = rtfVal,
+            e2eLatencyMs   = sttLatency,
+            payloadBytes   = encodedBytes,
+            activeLanguage = sentence.languageCode,
+            transport      = getTransportTypeLabel(),
+        )
+
         runCatching { transport.send(payload) }
             .onFailure { e -> Log.e(TAG, "transport.send() failed", e) }
 
@@ -539,9 +742,15 @@ class SessionController(
                 sessionMode        = _mode.value,
                 latitude           = null,
                 longitude          = null,
+                sttLatencyMs       = sttLatency,
+                queueLatencyMs     = queueMs,
+                networkLatencyMs   = 0L,
+                ttsLatencyMs       = 0L,
+                totalE2eLatencyMs  = sttLatency,
+                rtf                = rtfVal,
                 micPauseDetectedMs = sentence.timestampMs,
                 sttCompleteMs      = sttCompleteMs,
-                sentMs             = System.currentTimeMillis(),
+                sentMs             = payload.sentTimestampMs,
                 receivedMs         = 0L,
                 ttsStartedMs       = 0L,
             )
@@ -580,6 +789,7 @@ class SessionController(
                         PayloadType.FLOOR_GRANTED -> handleIncomingFloorGranted(payload)
                         PayloadType.FLOOR_DENIED  -> handleIncomingFloorDenied(payload)
                         PayloadType.RELEASE_FLOOR -> handleIncomingReleaseFloor(payload)
+                        PayloadType.LOCATION_UPDATE -> handleIncomingLocationUpdate(payload)
                         PayloadType.SPEECH, PayloadType.ALERT -> handleIncomingSpeech(payload)
                     }
                 }
@@ -753,30 +963,103 @@ class SessionController(
             timestampMs  = payload.sentTimestampMs,
             sequenceId   = payload.sequenceId,
             receivedTimestampMs = receivedMs,
+            sttLatencyMs = payload.sttLatencyMs,
+            rtf          = payload.rtf,
         )
 
-        Log.d(TAG, "[PTT] SPEECH_RECEIVED seq=${payload.sequenceId} text='${payload.text}' delay_since_send=${System.currentTimeMillis() - payload.sentTimestampMs}ms")
-        
-        val ttsStartedMs = System.currentTimeMillis()
-        ttsEngine.speak(sentence)
+        val sttLatency = payload.sttLatencyMs
+        val senderQueue = payload.senderQueueMs
+        val rtfVal = payload.rtf
+        // Network transit time estimation (clamped between 5ms and 300ms if clock skew is detected)
+        val rawNetTime = receivedMs - payload.sentTimestampMs
+        val networkLatency = if (rawNetTime in 0..1000) rawNetTime else 15L // fallback to typical P2P wireless delay if clocks are skewed
+        val encodedBytes = runCatching { BinaryEncoder.encode(payload).size }.getOrDefault(0)
 
-        appendTranscript(
-            TranscriptEntry(
-                direction          = Direction.RECEIVED,
-                text               = payload.text,
-                languageCode       = payload.languageCode,
-                isAlert            = sentence.isAlert,
-                sequenceId         = payload.sequenceId,
-                sessionMode        = _mode.value,
-                latitude           = payload.latitude,
-                longitude          = payload.longitude,
-                micPauseDetectedMs = payload.sentTimestampMs,
-                sttCompleteMs      = payload.sentTimestampMs,
-                sentMs             = payload.sentTimestampMs,
-                receivedMs         = receivedMs,
-                ttsStartedMs       = ttsStartedMs,
+        val initialE2e = sttLatency + senderQueue + networkLatency
+        val entry = TranscriptEntry(
+            direction           = Direction.RECEIVED,
+            text                = payload.text,
+            languageCode        = payload.languageCode,
+            isAlert             = sentence.isAlert,
+            sequenceId          = payload.sequenceId,
+            sessionMode         = _mode.value,
+            latitude            = payload.latitude,
+            longitude           = payload.longitude,
+            accuracy            = payload.accuracy,
+            locationTimestampMs = payload.locationTimestampMs,
+            locationStatus      = payload.locationStatus,
+            sttLatencyMs        = sttLatency,
+            queueLatencyMs      = senderQueue,
+            networkLatencyMs    = networkLatency,
+            ttsLatencyMs        = 0L,
+            totalE2eLatencyMs   = initialE2e,
+            rtf                 = rtfVal,
+            micPauseDetectedMs  = payload.sentTimestampMs,
+            sttCompleteMs       = payload.sentTimestampMs,
+            sentMs              = payload.sentTimestampMs,
+            receivedMs          = receivedMs,
+            ttsStartedMs        = 0L,
+        )
+
+        _telemetry.value = TelemetryState(
+            sttLatencyMs   = sttLatency,
+            ttsLatencyMs   = 0L,
+            rtf            = rtfVal,
+            e2eLatencyMs   = initialE2e,
+            payloadBytes   = encodedBytes,
+            activeLanguage = payload.languageCode.ifBlank { _selectedLanguage.value.code },
+            transport      = getTransportTypeLabel(),
+        )
+
+        appendTranscript(entry)
+
+        // Asynchronously speak and measure true TTS synthesis latency via callback
+        ttsEngine.speak(sentence) { actualTtsMs ->
+            val totalE2e = sttLatency + senderQueue + networkLatency + actualTtsMs
+            Log.d(TAG, "[TELEMETRY] Speech transaction complete: STT=${sttLatency}ms, Queue=${senderQueue}ms, Net=${networkLatency}ms, TTS=${actualTtsMs}ms, Total=${totalE2e}ms, RTF=$rtfVal")
+            _telemetry.value = TelemetryState(
+                sttLatencyMs   = sttLatency,
+                ttsLatencyMs   = actualTtsMs,
+                rtf            = rtfVal,
+                e2eLatencyMs   = totalE2e,
+                payloadBytes   = encodedBytes,
+                activeLanguage = payload.languageCode.ifBlank { _selectedLanguage.value.code },
+                transport      = getTransportTypeLabel(),
             )
-        )
+            // Update the transcript entry with actual TTS and total E2E latency
+            _transcript.update { list ->
+                list.map { item ->
+                    if (item.sequenceId == payload.sequenceId && item.direction == Direction.RECEIVED) {
+                        item.copy(
+                            ttsLatencyMs = actualTtsMs,
+                            totalE2eLatencyMs = totalE2e,
+                            ttsStartedMs = System.currentTimeMillis(),
+                        )
+                    } else {
+                        item
+                    }
+                }
+            }
+        }
+
+        if (payload.type == PayloadType.ALERT && payload.latitude != null && payload.longitude != null) {
+            val peerLoc = LocationInfo(
+                latitude = payload.latitude,
+                longitude = payload.longitude,
+                accuracyMeters = payload.accuracy ?: 0f,
+                timestampMs = payload.locationTimestampMs ?: payload.sentTimestampMs,
+            )
+            peerMovementTracker.addFix(peerLoc)
+            val localLoc = context?.let { LocationHelper.getLocationInfo(it) }
+            if (localLoc != null) {
+                localMovementTracker.addFix(localLoc)
+            }
+            updateLiveLocationState(
+                local = localLoc ?: _liveLocationState.value.localLocation,
+                peer = peerLoc,
+                peerUpdateMs = System.currentTimeMillis(),
+            )
+        }
     }
 
     private fun appendTranscript(entry: TranscriptEntry) {

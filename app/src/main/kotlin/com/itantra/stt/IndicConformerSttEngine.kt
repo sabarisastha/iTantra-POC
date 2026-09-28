@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import com.itantra.audio.AudioRecorder
 import com.itantra.model.ModelManager
+import com.itantra.vad.AdaptiveNoiseFloorVadPipeline
+import com.itantra.vad.SILERO_FRAME_SIZE
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -12,9 +14,21 @@ import kotlinx.coroutines.flow.asSharedFlow
 import java.util.concurrent.atomic.AtomicInteger
 
 private const val TAG = "ITAN-STT"
-private const val MIN_SEGMENT_SAMPLES = 4800 // ~300ms at 16kHz
-private const val MAX_CAPTURE_SAMPLES = AudioRecorder.SAMPLE_RATE * 60
 
+/**
+ * Speech-to-Text engine backed by Sherpa-ONNX (IndicConformer).
+ *
+ * Audio pipeline:
+ *   AudioRecorder (PCM-16 ShortArray chunks, 16kHz mono)
+ *     → frame accumulator (512 samples per Silero frame)
+ *     → AdaptiveNoiseFloorVadPipeline (Silero VAD + adaptive threshold + SpeechSegmenter FSM)
+ *     → processSpeechSegment (Sherpa-ONNX inference)
+ *     → recognizedSentences (shared flow)
+ *
+ * In PTT mode the [SessionController] calls [start] on FLOOR_GRANTED and [stop] on RELEASE_FLOOR.
+ * In PHONE mode it calls [start] immediately after mode transition (continuous, no floor control).
+ * Either way the VAD segmenter handles per-sentence boundaries automatically.
+ */
 class IndicConformerSttEngine(
     private val context: Context,
     private val modelManager: ModelManager
@@ -26,11 +40,8 @@ class IndicConformerSttEngine(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private var audioRecorder: AudioRecorder? = null
+    private var vadPipeline: AdaptiveNoiseFloorVadPipeline? = null
     private val sequenceIdCounter = AtomicInteger(0)
-
-    private val chunkLock = Any()
-    private val audioChunks = ArrayList<FloatArray>()
-    private var capturedSamples = 0
 
     @Volatile private var isRecording = false
     @Volatile private var isShutdown = false
@@ -49,8 +60,8 @@ class IndicConformerSttEngine(
                 if (isShutdown) break
                 try {
                     when (cmd) {
-                        is Command.Start -> handleStart()
-                        is Command.Stop -> handleStop()
+                        is Command.Start   -> handleStart()
+                        is Command.Stop    -> handleStop()
                         is Command.SetLang -> handleSetLanguage(cmd.langCode)
                     }
                 } catch (e: Exception) {
@@ -60,20 +71,42 @@ class IndicConformerSttEngine(
         }
     }
 
+    // ── SpeechToTextEngine API ────────────────────────────────────────────────
+
     override fun setLanguage(languageCode: String) {
         Log.d(TAG, "setLanguage($languageCode)")
         commandChannel.trySend(Command.SetLang(languageCode))
     }
 
+    override fun start() {
+        if (isShutdown) return
+        Log.d(TAG, "IndicConformerSttEngine.start() invoked, queueing START command")
+        commandChannel.trySend(Command.Start)
+    }
+
+    override fun stop() {
+        if (isShutdown) return
+        commandChannel.trySend(Command.Stop)
+    }
+
+    override fun shutdown() {
+        Log.d(TAG, "Shutting down STT Engine")
+        isShutdown = true
+        commandChannel.close()
+        isRecording = false
+        audioRecorder?.stopRecording()
+        audioRecorder = null
+        vadPipeline?.close()
+        vadPipeline = null
+        scope.cancel()
+    }
+
+    // ── Command handlers ──────────────────────────────────────────────────────
+
     private suspend fun handleSetLanguage(languageCode: String) {
         if (!isRecording) {
             modelManager.loadSttModel(languageCode)
         }
-    }
-
-    override fun start() {
-        if (isShutdown) return
-        commandChannel.trySend(Command.Start)
     }
 
     private fun handleStart() {
@@ -82,33 +115,50 @@ class IndicConformerSttEngine(
             return
         }
 
-        Log.d(TAG, "Starting STT Engine capture")
-        synchronized(chunkLock) {
-            audioChunks.clear()
-            capturedSamples = 0
-        }
+        Log.d(TAG, "IndicConformerSttEngine.start() invoked, starting AudioRecorder")
         isRecording = true
+
+        // Create a fresh VAD pipeline for this recording session
+        val pipeline = AdaptiveNoiseFloorVadPipeline(context)
+        vadPipeline = pipeline
+
+        // Accumulator for partial Silero frames (512 samples each)
+        val frameAccum = ShortArray(SILERO_FRAME_SIZE)
+        var framePos = 0
+        var totalFramesDispatched = 0
 
         val recorder = AudioRecorder()
         audioRecorder = recorder
-        recorder.startRecording { floatChunk ->
-            if (!isRecording) return@startRecording
-            synchronized(chunkLock) {
-                val remaining = MAX_CAPTURE_SAMPLES - capturedSamples
-                if (remaining > 0) {
-                    val accepted = floatChunk.copyOf(minOf(floatChunk.size, remaining))
-                    audioChunks.add(accepted)
-                    capturedSamples += accepted.size
-                } else {
-                    Log.w(TAG, "Maximum STT capture duration reached; dropping additional audio")
+        Log.d(TAG, "[ITAN-STT] AudioRecorder created, calling startRecordingShorts()")
+
+        // Use the ShortArray overload to avoid float→short conversion in the VAD hot path
+        recorder.startRecordingShorts { shortChunk ->
+            if (!isRecording) return@startRecordingShorts
+
+            for (s in shortChunk) {
+                frameAccum[framePos++] = s
+                if (framePos == SILERO_FRAME_SIZE) {
+                    // Copy frame before reset so the pipeline gets stable data
+                    val frame = frameAccum.copyOf()
+                    framePos = 0
+                    totalFramesDispatched++
+                    if (totalFramesDispatched == 1) {
+                        Log.d(TAG, "[ITAN-STT] First 512-sample frame dispatched to AdaptiveNoiseFloorVadPipeline")
+                    } else if (totalFramesDispatched % 50 == 0) {
+                        Log.v(TAG, "[ITAN-STT] VAD pipeline tick: $totalFramesDispatched frames processed")
+                    }
+                    // Launch in scope so we don't block the audio callback thread
+                    scope.launch {
+                        if (!isRecording) return@launch
+                        val segment = pipeline.processFrame(frame)
+                        if (segment != null) {
+                            Log.d(TAG, "[ITAN-STT] VAD speech segment complete: ${segment.size} samples (${segment.size / 16000f}s) — dispatching to STT")
+                            processSpeechSegment(segment)
+                        }
+                    }
                 }
             }
         }
-    }
-
-    override fun stop() {
-        if (isShutdown) return
-        commandChannel.trySend(Command.Stop)
     }
 
     private fun handleStop() {
@@ -116,38 +166,33 @@ class IndicConformerSttEngine(
             Log.d(TAG, "stop() called while not recording — ignored")
             return
         }
-        Log.d(TAG, "Stopping STT Engine capture")
+        Log.d(TAG, "Stopping VAD-gated STT capture")
         isRecording = false
 
         audioRecorder?.stopRecording()
         audioRecorder = null
 
-        val segment = synchronized(chunkLock) {
-            val totalSamples = audioChunks.sumOf { it.size }
-            if (totalSamples == 0) {
-                FloatArray(0)
-            } else {
-                val combined = FloatArray(totalSamples)
-                var offset = 0
-                for (chunk in audioChunks) {
-                    System.arraycopy(chunk, 0, combined, offset, chunk.size)
-                    offset += chunk.size
-                }
-                audioChunks.clear()
-                capturedSamples = 0
-                combined
-            }
-        }
+        val remainingSegment = vadPipeline?.flush()
+        vadPipeline?.close()
+        vadPipeline = null
 
-        if (segment.size >= MIN_SEGMENT_SAMPLES) {
-            scope.launch {
-                processSpeechSegment(segment)
+        if (remainingSegment != null && remainingSegment.isNotEmpty()) {
+            Log.d(TAG, "[ITAN-STT] PTT release flush — processing ${remainingSegment.size} samples (${remainingSegment.size / 16000f}s)")
+            scope.launch(Dispatchers.Default) {
+                processSpeechSegment(remainingSegment)
             }
         } else {
-            Log.d(TAG, "Speech segment too short (${segment.size} samples < $MIN_SEGMENT_SAMPLES) — discarded")
+            Log.w(TAG, "[ITAN-STT] PTT release flush returned NULL or empty segment")
         }
     }
 
+    // ── Inference ─────────────────────────────────────────────────────────────
+
+    /**
+     * Run Sherpa-ONNX inference on a completed VAD speech segment.
+     *
+     * @param audioData Normalised float PCM [-1.0, 1.0] at 16kHz mono.
+     */
     private suspend fun processSpeechSegment(audioData: FloatArray) {
         if (audioData.isEmpty() || isShutdown) return
 
@@ -159,15 +204,17 @@ class IndicConformerSttEngine(
             recognizer = modelManager.loadSttModel(lang)
         }
 
-        var text = ""
         val langCode = modelManager.currentSttLang ?: lang
+        var text = ""
+        var sttLatency = 0L
+        var rtfVal = 0f
 
         if (recognizer != null) {
             val acquiredRecognizer = modelManager.acquireSttForInference()
             if (acquiredRecognizer != null) {
                 try {
                     val startMs = System.currentTimeMillis()
-                    Log.d(TAG, "Running Sherpa-ONNX STT inference on ${audioData.size} samples (${audioData.size / 16000f}s)")
+                    Log.d(TAG, "Running Sherpa-ONNX STT on ${audioData.size} samples (${audioData.size / 16000f}s)")
                     val stream = acquiredRecognizer.createStream()
                     stream.acceptWaveform(audioData, sampleRate = AudioRecorder.SAMPLE_RATE)
                     acquiredRecognizer.decode(stream)
@@ -176,7 +223,10 @@ class IndicConformerSttEngine(
 
                     text = result.text.trim()
                     val latencyMs = System.currentTimeMillis() - startMs
-                    Log.d(TAG, "STT inference finished in ${latencyMs}ms: '$text'")
+                    sttLatency = latencyMs
+                    val audioDurationMs = (audioData.size.toFloat() / AudioRecorder.SAMPLE_RATE) * 1000f
+                    rtfVal = if (audioDurationMs > 0f) latencyMs.toFloat() / audioDurationMs else 0f
+                    Log.d(TAG, "STT inference done in ${latencyMs}ms (RTF: $rtfVal): '$text'")
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -188,34 +238,22 @@ class IndicConformerSttEngine(
         }
 
         if (text.isBlank()) {
-            Log.d(TAG, "[ITAN-STT] Silence / blank transcription — skipping emission")
+            Log.d(TAG, "[ITAN-STT] Blank transcription — skipping emission")
             return
         }
 
         val seqId = sequenceIdCounter.incrementAndGet()
-        Log.d(TAG, "[ITAN-STT] Recognized: '$text' lang=$langCode seq=$seqId")
+        Log.d(TAG, "[ITAN-STT] Recognized: '$text' lang=$langCode seq=$seqId rtf=$rtfVal")
         _recognizedSentences.emit(
             RecognizedSentence(
                 text         = text,
                 languageCode = langCode,
                 isAlert      = false,
-                timestampMs  = System.currentTimeMillis(),
-                sequenceId   = seqId
+                timestampMs  = System.currentTimeMillis() - sttLatency,
+                sequenceId   = seqId,
+                sttLatencyMs = sttLatency,
+                rtf          = rtfVal,
             )
         )
-    }
-
-    override fun shutdown() {
-        Log.d(TAG, "Shutting down STT Engine")
-        isShutdown = true
-        commandChannel.close()
-        isRecording = false
-        audioRecorder?.stopRecording()
-        audioRecorder = null
-        synchronized(chunkLock) {
-            audioChunks.clear()
-            capturedSamples = 0
-        }
-        scope.cancel()
     }
 }
