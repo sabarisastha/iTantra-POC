@@ -1,4 +1,4 @@
-﻿package com.itantra.tts
+package com.itantra.tts
 
 import com.itantra.stt.RecognizedSentence
 
@@ -26,6 +26,13 @@ interface TextToSpeechEngine {
      * This method may return before playback completes.
      */
     fun speak(sentence: RecognizedSentence)
+
+    /**
+     * Synthesize and play [sentence], invoking [onAudioReady] when synthesis is complete and audio playback begins.
+     */
+    fun speak(sentence: RecognizedSentence, onAudioReady: ((ttsLatencyMs: Long) -> Unit)? = null) {
+        speak(sentence)
+    }
 
     /**
      * Synthesize and play [sentence], suspending until audio playback finishes completely.

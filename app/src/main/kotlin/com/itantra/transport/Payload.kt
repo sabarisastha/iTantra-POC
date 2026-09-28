@@ -21,6 +21,18 @@ data class Payload(
     /** Set locally by receiver when dequeued; NOT included in transmitted JSON. */
     @Transient
     val receivedTimestampMs: Long = 0L,
+    
+    // Emergency Location Data
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val accuracy: Float? = null,
+    val locationTimestampMs: Long? = null,
+    val locationStatus: String? = null,
+
+    // Telemetry & Latency (populated on sender, read on receiver)
+    val sttLatencyMs: Long = 0L,
+    val senderQueueMs: Long = 0L,
+    val rtf: Float = 0f,
 )
 
 enum class PayloadType {
@@ -50,5 +62,6 @@ enum class PayloadType {
 
     SESSION_INIT,
     SESSION_ACK,
-    HEARTBEAT
+    HEARTBEAT,
+    LOCATION_UPDATE,
 }

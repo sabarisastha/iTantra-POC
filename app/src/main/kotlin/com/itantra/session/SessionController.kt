@@ -34,7 +34,13 @@ class SessionController(
     private val sttEngine: SpeechToTextEngine,
     private val ttsEngine: TextToSpeechEngine,
     val transport: TransportChannel,
+    private val historyDao: com.itantra.db.HistoryDao? = null,
+    val context: android.content.Context? = null,
 ) {
+    val dutyCycleScheduler: com.itantra.audio.DutyCycleScheduler? =
+        context?.let { com.itantra.audio.DutyCycleScheduler(it) }
+    val dutyCycleInfo: StateFlow<com.itantra.audio.DutyCycleInfo>? =
+        dutyCycleScheduler?.dutyCycleInfo
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     val localPeerId: String = UUID.randomUUID().toString().take(8)
@@ -285,17 +291,26 @@ class SessionController(
         }
     }
 
-    fun triggerAlert() {
-        Log.d(TAG, "triggerAlert()")
+    fun triggerAlert(
+        latitude: Double? = null,
+        longitude: Double? = null,
+        accuracy: Float? = null,
+        locationStatus: String? = null,
+    ) {
+        Log.d(TAG, "triggerAlert(lat=$latitude, lon=$longitude, acc=$accuracy, status=$locationStatus)")
         scope.launch {
             sendSentence(
-                RecognizedSentence(
+                sentence = RecognizedSentence(
                     text         = "[ALERT] Manual alert triggered by operator",
                     languageCode = _selectedLanguage.value.code,
                     isAlert      = true,
                     timestampMs  = System.currentTimeMillis(),
                     sequenceId   = -1,
-                )
+                ),
+                latitude = latitude,
+                longitude = longitude,
+                accuracy = accuracy,
+                locationStatus = locationStatus,
             )
         }
     }
@@ -345,7 +360,13 @@ class SessionController(
         }
     }
 
-    private suspend fun sendSentence(sentence: RecognizedSentence) {
+    private suspend fun sendSentence(
+        sentence: RecognizedSentence,
+        latitude: Double? = null,
+        longitude: Double? = null,
+        accuracy: Float? = null,
+        locationStatus: String? = null,
+    ) {
         val sttCompleteMs = System.currentTimeMillis()
         val payload = Payload(
             type            = if (sentence.isAlert) PayloadType.ALERT else PayloadType.SPEECH,
@@ -354,6 +375,10 @@ class SessionController(
             sequenceId      = sentence.sequenceId,
             sentTimestampMs = sttCompleteMs,
             senderId        = localPeerId,
+            latitude        = latitude,
+            longitude       = longitude,
+            accuracy        = accuracy,
+            locationStatus  = locationStatus,
         )
         runCatching { transport.send(payload) }
             .onFailure { e -> Log.e(TAG, "transport.send() failed", e) }
@@ -408,6 +433,7 @@ class SessionController(
                         PayloadType.FLOOR_DENIED  -> handleIncomingFloorDenied(payload)
                         PayloadType.RELEASE_FLOOR -> handleIncomingReleaseFloor(payload)
                         PayloadType.SPEECH, PayloadType.ALERT -> handleIncomingSpeech(payload)
+                        PayloadType.LOCATION_UPDATE -> Log.d(TAG, "Incoming LOCATION_UPDATE from ${payload.senderId} (${payload.latitude}, ${payload.longitude})")
                     }
                 }
         }
@@ -639,5 +665,22 @@ class SessionController(
 
     private fun appendTranscript(entry: TranscriptEntry) {
         _transcript.update { (it + entry).takeLast(MAX_TRANSCRIPT_ENTRIES) }
+        historyDao?.let { dao ->
+            scope.launch(Dispatchers.IO) {
+                runCatching {
+                    dao.insertHistory(
+                        com.itantra.db.HistoryEntity(
+                            peerName = entry.direction.name,
+                            peerAddress = "",
+                            timestampMs = System.currentTimeMillis(),
+                            durationMs = 0L,
+                            transportType = _mode.value.name,
+                            languageUsed = entry.languageCode,
+                            status = "SUCCESS"
+                        )
+                    )
+                }
+            }
+        }
     }
 }

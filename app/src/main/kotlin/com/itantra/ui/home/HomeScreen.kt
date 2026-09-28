@@ -52,6 +52,7 @@ fun HomeScreen(
     modelManager: ModelManager,
     onNavigateToSession: () -> Unit,
     permissionsGranted: StateFlow<Boolean>,
+    historyDao: com.itantra.db.HistoryDao? = null,
     vm: HomeViewModel = viewModel(factory = HomeViewModel.factory(transport, sessionController, modelManager, permissionsGranted)),
 ) {
     val state    by vm.connectionState.collectAsStateWithLifecycle()
