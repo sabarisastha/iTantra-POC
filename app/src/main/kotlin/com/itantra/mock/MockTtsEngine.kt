@@ -1,4 +1,4 @@
-﻿package com.itantra.mock
+package com.itantra.mock
 
 import android.content.Context
 import android.media.AudioAttributes
@@ -21,7 +21,8 @@ class MockTtsEngine(private val context: Context) : TextToSpeechEngine {
 
     private var tts: TextToSpeech? = null
     @Volatile private var initialized = false
-    private val pendingUtterances = mutableListOf<RecognizedSentence>()
+    private val pendingUtterances = mutableListOf<Pair<RecognizedSentence, ((Long) -> Unit)?>>()
+    private val pendingCallbacks = ConcurrentHashMap<String, Pair<Long, ((Long) -> Unit)?>>()
     private val alertPrevVolumes = ConcurrentHashMap<String, Int>()
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -40,13 +41,13 @@ class MockTtsEngine(private val context: Context) : TextToSpeechEngine {
                 tts?.setOnUtteranceProgressListener(utteranceListener)
                 Log.d(TAG, "Android TextToSpeech successfully initialized")
                 
-                val toProcess: List<RecognizedSentence>
+                val toProcess: List<Pair<RecognizedSentence, ((Long) -> Unit)?>>
                 synchronized(pendingUtterances) {
                     toProcess = pendingUtterances.toList()
                     pendingUtterances.clear()
                 }
                 Log.d(TAG, "Flushing ${toProcess.size} pending TTS utterances")
-                toProcess.forEach { speak(it) }
+                toProcess.forEach { (sentence, callback) -> speak(sentence, callback) }
             } else {
                 Log.e(TAG, "TextToSpeech init failed: status=$status")
             }
@@ -54,16 +55,25 @@ class MockTtsEngine(private val context: Context) : TextToSpeechEngine {
     }
 
     override fun speak(sentence: RecognizedSentence) {
+        speak(sentence, null)
+    }
+
+    override fun speak(sentence: RecognizedSentence, onAudioReady: ((ttsLatencyMs: Long) -> Unit)?) {
         Log.d(TAG, "speak() requested: text='${sentence.text}', lang='${sentence.languageCode}', alert=${sentence.isAlert}, initialized=$initialized")
         if (!initialized || tts == null) {
             synchronized(pendingUtterances) {
-                pendingUtterances.add(sentence)
+                pendingUtterances.add(Pair(sentence, onAudioReady))
             }
             Log.d(TAG, "TTS not ready yet; queued utterance: ${sentence.text}")
             initTts()
             return
         }
-        val uid    = UUID.randomUUID().toString()
+        val uid = "${sentence.sequenceId}_${UUID.randomUUID()}"
+        val startMs = System.currentTimeMillis()
+        if (onAudioReady != null) {
+            pendingCallbacks[uid] = Pair(startMs, onAudioReady)
+        }
+
         val locale = localeFor(sentence.languageCode)
         val result = tts?.setLanguage(locale)
         if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
@@ -83,6 +93,7 @@ class MockTtsEngine(private val context: Context) : TextToSpeechEngine {
         Log.d(TAG, "stop() called — stopping speech playback and releasing alert focus")
         releaseAlertFocus()
         runCatching { tts?.stop() }
+        pendingCallbacks.clear()
         synchronized(pendingUtterances) {
             pendingUtterances.clear()
         }
@@ -157,10 +168,22 @@ class MockTtsEngine(private val context: Context) : TextToSpeechEngine {
     private val utteranceListener = object : UtteranceProgressListener() {
         override fun onStart(uid: String?) {
             Log.d(TAG, "TTS utterance started: uid=$uid")
+            if (uid != null) {
+                pendingCallbacks.remove(uid)?.let { (startMs, callback) ->
+                    val latencyMs = System.currentTimeMillis() - startMs
+                    callback?.invoke(latencyMs)
+                }
+            }
         }
         
         override fun onDone(uid: String?) {
             Log.d(TAG, "TTS utterance completed: uid=$uid")
+            if (uid != null) {
+                pendingCallbacks.remove(uid)?.let { (startMs, callback) ->
+                    val latencyMs = System.currentTimeMillis() - startMs
+                    callback?.invoke(latencyMs)
+                }
+            }
             restoreVolume(uid)
             releaseAlertFocus()
         }
