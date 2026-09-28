@@ -1,0 +1,134 @@
+package com.itantra.model
+
+const val HF_STT_BASE = "https://huggingface.co/parismitaglobalsolutions/indicconformer-sherpa-onnx/resolve/main"
+const val HF_TTS_BASE = "https://huggingface.co/csukuangfj/vits-mms/resolve/main"
+const val HF_TTS_RASA_BASE = "https://huggingface.co/MatiasLin/sherpa-onnx-vits-rasa-13/resolve/main"
+
+data class LanguageConfig(
+    val code: String,
+    val displayName: String,
+    val sttModelUrl: String,
+    val sttTokensUrl: String,
+    val ttsModelUrl: String? = null,
+    val ttsTokensUrl: String? = null,
+    val ttsSharedModelId: String? = null,
+    val ttsSpeakerId: Int = 0,
+    val available: Boolean = true
+)
+
+val SUPPORTED_LANGUAGES = listOf(
+    LanguageConfig(
+        code = "hi",
+        displayName = "Hindi",
+        sttModelUrl = "$HF_STT_BASE/hi/model.int8.onnx",
+        sttTokensUrl = "$HF_STT_BASE/tokens.txt",
+        ttsModelUrl = "$HF_TTS_RASA_BASE/model.onnx",
+        ttsTokensUrl = "$HF_TTS_RASA_BASE/tokens.txt",
+        ttsSharedModelId = "vits-rasa-13",
+        ttsSpeakerId = 0
+    ),
+    LanguageConfig(
+        code = "bn",
+        displayName = "Bengali",
+        sttModelUrl = "$HF_STT_BASE/bn/model.int8.onnx",
+        sttTokensUrl = "$HF_STT_BASE/tokens.txt",
+        ttsModelUrl = "$HF_TTS_RASA_BASE/model.onnx",
+        ttsTokensUrl = "$HF_TTS_RASA_BASE/tokens.txt",
+        ttsSharedModelId = "vits-rasa-13",
+        ttsSpeakerId = 2
+    ),
+    LanguageConfig(
+        code = "ta",
+        displayName = "Tamil",
+        sttModelUrl = "$HF_STT_BASE/ta/model.int8.onnx",
+        sttTokensUrl = "$HF_STT_BASE/tokens.txt",
+        ttsModelUrl = "$HF_TTS_RASA_BASE/model.onnx",
+        ttsTokensUrl = "$HF_TTS_RASA_BASE/tokens.txt",
+        ttsSharedModelId = "vits-rasa-13",
+        ttsSpeakerId = 18
+    ),
+    LanguageConfig(
+        code = "te",
+        displayName = "Telugu",
+        sttModelUrl = "$HF_STT_BASE/te/model.int8.onnx",
+        sttTokensUrl = "$HF_STT_BASE/tokens.txt",
+        ttsModelUrl = "$HF_TTS_RASA_BASE/model.onnx",
+        ttsTokensUrl = "$HF_TTS_RASA_BASE/tokens.txt",
+        ttsSharedModelId = "vits-rasa-13",
+        ttsSpeakerId = 19
+    ),
+    LanguageConfig(
+        code = "mr",
+        displayName = "Marathi",
+        sttModelUrl = "$HF_STT_BASE/mr/model.int8.onnx",
+        sttTokensUrl = "$HF_STT_BASE/tokens.txt",
+        ttsModelUrl = "$HF_TTS_RASA_BASE/model.onnx",
+        ttsTokensUrl = "$HF_TTS_RASA_BASE/tokens.txt",
+        ttsSharedModelId = "vits-rasa-13",
+        ttsSpeakerId = 12
+    ),
+    LanguageConfig(
+        code = "gu",
+        displayName = "Gujarati",
+        sttModelUrl = "$HF_STT_BASE/gu/model.int8.onnx",
+        sttTokensUrl = "$HF_STT_BASE/tokens.txt",
+        ttsModelUrl = "$HF_TTS_RASA_BASE/model.onnx",
+        ttsTokensUrl = "$HF_TTS_RASA_BASE/tokens.txt",
+        ttsSharedModelId = "vits-rasa-13",
+        ttsSpeakerId = 0
+    ),
+    LanguageConfig(
+        code = "kn",
+        displayName = "Kannada",
+        sttModelUrl = "$HF_STT_BASE/kn/model.int8.onnx",
+        sttTokensUrl = "$HF_STT_BASE/tokens.txt",
+        ttsModelUrl = "$HF_TTS_RASA_BASE/model.onnx",
+        ttsTokensUrl = "$HF_TTS_RASA_BASE/tokens.txt",
+        ttsSharedModelId = "vits-rasa-13",
+        ttsSpeakerId = 8
+    ),
+    LanguageConfig(
+        code = "ml",
+        displayName = "Malayalam",
+        sttModelUrl = "$HF_STT_BASE/ml/model.int8.onnx",
+        sttTokensUrl = "$HF_STT_BASE/tokens.txt",
+        ttsModelUrl = "$HF_TTS_RASA_BASE/model.onnx",
+        ttsTokensUrl = "$HF_TTS_RASA_BASE/tokens.txt",
+        ttsSharedModelId = "vits-rasa-13",
+        ttsSpeakerId = 11
+    ),
+    LanguageConfig(
+        code = "or",
+        displayName = "Odia (Coming Soon)",
+        sttModelUrl = "",
+        sttTokensUrl = "",
+        ttsModelUrl = "$HF_TTS_RASA_BASE/model.onnx",
+        ttsTokensUrl = "$HF_TTS_RASA_BASE/tokens.txt",
+        ttsSharedModelId = "vits-rasa-13",
+        ttsSpeakerId = 0,
+        available = true
+    ),
+    LanguageConfig(
+        code = "as",
+        displayName = "Assamese",
+        sttModelUrl = "$HF_STT_BASE/as/model.int8.onnx",
+        sttTokensUrl = "$HF_STT_BASE/tokens.txt",
+        ttsModelUrl = "$HF_TTS_RASA_BASE/model.onnx",
+        ttsTokensUrl = "$HF_TTS_RASA_BASE/tokens.txt",
+        ttsSharedModelId = "vits-rasa-13",
+        ttsSpeakerId = 0
+    ),
+    LanguageConfig(
+        code = "en",
+        displayName = "English",
+        sttModelUrl = "$HF_STT_BASE/en/model.int8.onnx",
+        sttTokensUrl = "$HF_STT_BASE/tokens.txt",
+        ttsModelUrl = "https://huggingface.co/csukuangfj/vits-mms-eng/resolve/main/model.onnx",
+        ttsTokensUrl = "https://huggingface.co/csukuangfj/vits-mms-eng/resolve/main/tokens.txt",
+        ttsSharedModelId = null,
+        ttsSpeakerId = 0
+    )
+)
+
+fun getLanguageConfig(code: String): LanguageConfig? =
+    SUPPORTED_LANGUAGES.find { it.code == code }
