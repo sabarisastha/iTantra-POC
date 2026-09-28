@@ -37,6 +37,10 @@ class SileroVadEngine(
     @Volatile private var isInitialized = false
 
     // Model input metadata
+    companion object {
+        @Volatile var isOrtUnavailable = false
+    }
+
     private var isV5 = false
     private var stateShape = longArrayOf(2, 1, 128) // Default Silero v5 state shape
 
@@ -58,6 +62,7 @@ class SileroVadEngine(
     }
 
     private fun initOnnx() {
+        if (isOrtUnavailable) return
         try {
             Log.d(TAG, "Initializing ONNX Runtime and loading $MODEL_ASSET...")
             val env = OrtEnvironment.getEnvironment()
@@ -92,7 +97,8 @@ class SileroVadEngine(
             reset()
             isInitialized = true
         } catch (t: Throwable) {
-            Log.e(TAG, "Failed to initialize Silero VAD via ONNX Runtime. Will use fallback VAD.", t)
+            Log.e(TAG, "Failed to initialize Silero VAD via ONNX Runtime. Latching to energy fallback VAD.", t)
+            isOrtUnavailable = true
             isInitialized = false
         }
     }
@@ -212,8 +218,9 @@ class SileroVadEngine(
             sumSq += s * s
         }
         val rms = sqrt(sumSq / pcmFrame.size)
-        val dbfs = if (rms > 0.0) 20.0 * log10(rms / 32767.0) else -100.0
-        val isVoiced = dbfs >= -38.0
+        val normRms = rms / 32767.0
+        val dbfs = if (rms > 0.0) 20.0 * log10(normRms) else -100.0
+        val isVoiced = dbfs >= -42.0 || normRms > 0.008
         val prob = if (isVoiced) 0.85f else 0.10f
         return VadResult(speechProbability = prob, isSpeech = isVoiced)
     }

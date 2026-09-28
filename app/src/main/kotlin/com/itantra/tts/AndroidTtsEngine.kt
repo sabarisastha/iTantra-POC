@@ -24,7 +24,8 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
 
     private var tts: TextToSpeech? = null
     @Volatile private var initialized = false
-    private val pendingUtterances = mutableListOf<RecognizedSentence>()
+    private val pendingUtterances = mutableListOf<Pair<RecognizedSentence, ((Long) -> Unit)?>>()
+    private val pendingCallbacks = ConcurrentHashMap<String, Pair<Long, ((Long) -> Unit)?>>()
     private val alertPrevVolumes = ConcurrentHashMap<String, Int>()
     private val historyMap = ConcurrentHashMap<Int, RecognizedSentence>()
     private val textHashMap = ConcurrentHashMap<Int, RecognizedSentence>()
@@ -55,13 +56,13 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
 
                 Log.d(TAG, "Android TextToSpeech successfully initialized")
                 
-                val toProcess: List<RecognizedSentence>
+                val toProcess: List<Pair<RecognizedSentence, ((Long) -> Unit)?>>
                 synchronized(pendingUtterances) {
                     toProcess = pendingUtterances.toList()
                     pendingUtterances.clear()
                 }
                 Log.d(TAG, "Flushing ${toProcess.size} pending TTS utterances")
-                toProcess.forEach { speak(it) }
+                toProcess.forEach { (sentence, callback) -> speak(sentence, callback) }
             } else {
                 Log.e(TAG, "Android TextToSpeech init failed: status=$status")
             }
@@ -81,11 +82,15 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
             ?: return false
 
         Log.d(TAG, "Replaying sentence sequenceId=$sequenceId text='${sentence.text}' via Android System TTS")
-        speak(sentence)
+        speak(sentence, null)
         return true
     }
 
     override fun speak(sentence: RecognizedSentence) {
+        speak(sentence, null)
+    }
+
+    override fun speak(sentence: RecognizedSentence, onAudioReady: ((ttsLatencyMs: Long) -> Unit)?) {
         if (sentence.text.isBlank()) return
         
         // Cache sentence for replay under sequenceId AND text hash
@@ -95,14 +100,19 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
         Log.d(TAG, "speak() requested: text='${sentence.text}', seq=${sentence.sequenceId}, lang='${sentence.languageCode}', alert=${sentence.isAlert}, initialized=$initialized")
         if (!initialized || tts == null) {
             synchronized(pendingUtterances) {
-                pendingUtterances.add(sentence)
+                pendingUtterances.add(Pair(sentence, onAudioReady))
             }
             Log.d(TAG, "TTS not ready yet; queued utterance: ${sentence.text}")
             initTts()
             return
         }
 
-        val uid = UUID.randomUUID().toString()
+        val uid = "${sentence.sequenceId}_${UUID.randomUUID()}"
+        val startMs = System.currentTimeMillis()
+        if (onAudioReady != null) {
+            pendingCallbacks[uid] = Pair(startMs, onAudioReady)
+        }
+
         val locale = localeFor(sentence.languageCode)
         var result = tts?.setLanguage(locale)
         if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
@@ -130,6 +140,7 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
         releaseAlertFocus()
         releaseNormalFocus()
         runCatching { tts?.stop() }
+        pendingCallbacks.clear()
         synchronized(pendingUtterances) {
             pendingUtterances.clear()
         }

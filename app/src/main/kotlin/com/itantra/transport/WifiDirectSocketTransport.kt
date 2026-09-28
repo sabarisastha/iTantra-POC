@@ -22,6 +22,8 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import com.itantra.transport.binary.BinaryDecoder
+import com.itantra.transport.binary.BinaryEncoder
 import java.net.BindException
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -199,9 +201,9 @@ class WifiDirectSocketTransport(
     override suspend fun send(payload: Payload) {
         val socket = framedSocket
             ?: throw IllegalStateException("[ITANTRA-SOCKET] send() called while not connected")
-        val encoded = json.encodeToString(payload).toByteArray(Charsets.UTF_8)
-        Log.d(TAG, "[ITANTRA-SOCKET] send seq=${payload.sequenceId} type=${payload.type}")
-        socket.writeFrame(FrameType.JSON_PAYLOAD, encoded)
+        val encoded = BinaryEncoder.encode(payload)
+        Log.d(TAG, "[ITANTRA-SOCKET] send seq=${payload.sequenceId} type=${payload.type} binaryBytes=${encoded.size}")
+        socket.writeFrame(FrameType.BINARY_PAYLOAD, encoded)
     }
 
     override suspend fun sendPcm(pcm: FloatArray) {
@@ -457,6 +459,14 @@ class WifiDirectSocketTransport(
                 break
             }
             when (frame.first) {
+                FrameType.BINARY_PAYLOAD -> {
+                    val payload = BinaryDecoder.decode(frame.second)?.copy(receivedTimestampMs = System.currentTimeMillis())
+                    if (payload != null) {
+                        _onPayloadReceived.emit(payload)
+                    } else {
+                        Log.e(TAG, "[ITANTRA-SOCKET] Binary decode failed for frame size=${frame.second.size}")
+                    }
+                }
                 FrameType.JSON_PAYLOAD -> {
                     val str = String(frame.second, Charsets.UTF_8)
                     runCatching {
