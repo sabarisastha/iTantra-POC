@@ -1,10 +1,10 @@
-﻿#!/usr/bin/env sh
+#!/usr/bin/env sh
 # Gradle startup script for POSIX systems
 APP_NAME="Gradle"
 APP_BASE_NAME=`basename "$0"`
 APP_HOME=`dirname "$0"`
 APP_HOME=`cd "$APP_HOME" && pwd`
-DEFAULT_JVM_OPTS='"-Xmx64m" "-Xms64m"'
+DEFAULT_JVM_OPTS=""
 if [ -n "$JAVA_HOME" ] ; then
     JAVACMD="$JAVA_HOME/bin/java"
     if [ ! -x "$JAVACMD" ] ; then

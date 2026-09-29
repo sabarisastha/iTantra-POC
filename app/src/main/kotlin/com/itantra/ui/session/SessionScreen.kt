@@ -1,10 +1,7 @@
 package com.itantra.ui.session
 
-import android.util.Log
 import android.content.pm.PackageManager
-import androidx.core.content.ContextCompat
-import androidx.compose.ui.platform.LocalContext
-import com.itantra.utils.LocationHelper
+import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
@@ -32,9 +29,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.itantra.audio.DutyCycleInfo
@@ -46,6 +45,7 @@ import com.itantra.session.SupportedLanguage
 import com.itantra.session.TranscriptEntry
 import com.itantra.telemetry.TelemetryState
 import com.itantra.transport.ConnectionState
+import com.itantra.utils.LocationHelper
 import java.text.SimpleDateFormat
 import java.util.*
 import kotlinx.coroutines.launch
@@ -159,7 +159,7 @@ fun SessionScreen(
                         }
                     }
                 },
-                icon             = { 
+                icon = { 
                     if (isLocatingForAlert) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(18.dp),
@@ -170,9 +170,9 @@ fun SessionScreen(
                         Icon(Icons.Default.Warning, contentDescription = null)
                     }
                 },
-                text             = { Text(if (isLocatingForAlert) "Locating & Sending..." else "Send Alert") },
-                containerColor   = MaterialTheme.colorScheme.errorContainer,
-                contentColor     = MaterialTheme.colorScheme.onErrorContainer,
+                text = { Text(if (isLocatingForAlert) "Locating & Sending..." else "Send Alert") },
+                containerColor = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
             )
         },
     ) { padding ->
@@ -216,7 +216,12 @@ fun SessionScreen(
                 }
 
                 // ── Latency debug overlay ────────────────────────────────────────
-                LatencyPanel(entries = entries, expanded = latencyExpanded, onToggle = { latencyExpanded = !latencyExpanded })
+                LatencyPanel(
+                    entries = entries,
+                    telemetry = telemetry,
+                    expanded = latencyExpanded,
+                    onToggle = { latencyExpanded = !latencyExpanded }
+                )
 
                 // ── Transcript log ───────────────────────────────────────────────
                 Text("Transcript", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
@@ -234,14 +239,6 @@ fun SessionScreen(
                     },
                 )
             }
-
-            // ── Live Telemetry Overlay (top-end via Box + Alignment.TopEnd) ────
-            TelemetryOverlay(
-                telemetry = telemetry,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 56.dp, end = 12.dp)
-            )
         }
     }
 }
@@ -432,6 +429,66 @@ private fun FloorStatusBanner(
 private data class Tuple4<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Live Peer Distance Banner
+// ─────────────────────────────────────────────────────────────────────────────
+@Composable
+private fun LivePeerDistanceBanner(
+    liveLocation: com.itantra.utils.LiveLocationState,
+) {
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    Icon(
+                        Icons.Default.Navigation,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        text = "Live Peer Distance: ${LocationHelper.formatDistance(liveLocation.distanceMeters)}",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                val bearingStr = liveLocation.peerBearingDeg?.let { LocationHelper.getBearingDirection(it) } ?: "N/A"
+                Text(
+                    text = "Bearing: $bearingStr",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            val speedMps = liveLocation.peerLocation?.speedMps
+            if (speedMps != null || liveLocation.peerMovementState != com.itantra.utils.MovementState.UNKNOWN) {
+                val speedStr = speedMps?.let { String.format(Locale.US, "%.1f m/s", it) } ?: ""
+                Text(
+                    text = "Peer motion: ${liveLocation.peerMovementState.label} ${if (speedStr.isNotBlank()) "($speedStr)" else ""}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Walkie-Talkie PTT Button
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
@@ -539,96 +596,6 @@ private fun WalkieTalkiePttButton(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Live Peer Distance Banner
-// ─────────────────────────────────────────────────────────────────────────────
-@Composable
-private fun LivePeerDistanceBanner(
-    liveLocation: com.itantra.utils.LiveLocationState,
-) {
-    val context = LocalContext.current
-    Card(
-        shape = RoundedCornerShape(14.dp),
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f)),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    Icon(
-                        Icons.Default.Navigation,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Text(
-                        text = "Live Peer Distance: ${LocationHelper.formatDistance(liveLocation.distanceMeters)}",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (liveLocation.peerLocation != null) {
-                    IconButton(
-                        onClick = {
-                            LocationHelper.openMap(
-                                context,
-                                liveLocation.peerLocation.latitude,
-                                liveLocation.peerLocation.longitude,
-                                "Peer Live Location"
-                            )
-                        },
-                        modifier = Modifier.size(28.dp),
-                    ) {
-                        Icon(
-                            Icons.Default.Map,
-                            contentDescription = "Open Map",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-                }
-            }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text(
-                    text = "Peer: ${liveLocation.peerMovementState.label} • Me: ${liveLocation.localMovementState.label}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                )
-                if (liveLocation.lastPeerUpdateMs > 0L) {
-                    Text(
-                        text = LocationHelper.formatLocationAge(liveLocation.lastPeerUpdateMs),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.outline,
-                    )
-                }
-            }
-            if (liveLocation.relativeDirection != com.itantra.utils.RelativeDirection.UNAVAILABLE) {
-                Text(
-                    text = "Relative Heading: ${liveLocation.relativeDirection.label}",
-                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Transcript log
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
@@ -686,13 +653,13 @@ private fun TranscriptBubble(entry: TranscriptEntry, timeFmt: SimpleDateFormat, 
                     )
                 }
                 Text(entry.text, color = fg, style = MaterialTheme.typography.bodyMedium, fontWeight = if (entry.isAlert) FontWeight.SemiBold else FontWeight.Normal)
-                
+
                 if (entry.isAlert) {
                     if (entry.latitude != null && entry.longitude != null) {
                         val lat = entry.latitude
                         val lon = entry.longitude
                         val accStr = LocationHelper.formatAccuracy(entry.accuracy)
-                        val ageStr = LocationHelper.formatLocationAge(entry.locationTimestampMs ?: entry.sentMs)
+                        val ageStr = LocationHelper.formatLocationAge(entry.sentMs)
 
                         Surface(
                             shape = RoundedCornerShape(8.dp),
@@ -764,11 +731,31 @@ private fun TranscriptBubble(entry: TranscriptEntry, timeFmt: SimpleDateFormat, 
                             fontWeight = FontWeight.Medium
                         )
                     }
+                } else if (entry.latitude != null && entry.longitude != null) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = fg.copy(alpha = 0.15f),
+                        modifier = Modifier.padding(vertical = 2.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(Icons.Default.LocationOn, contentDescription = "GPS Location", tint = fg, modifier = Modifier.size(12.dp))
+                            Text(
+                                text = String.format(Locale.US, "%.4f, %.4f", entry.latitude, entry.longitude) + (entry.accuracy?.let { " (±%.0fm)" } ?: ""),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = fg,
+                            )
+                        }
+                    }
                 }
-                
+
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    val totalMs = entry.totalLatencyMs
                     Text(
-                        "${entry.languageCode} • ${timeFmt.format(Date(entry.sentMs))}",
+                        "${entry.languageCode} • ${timeFmt.format(Date(entry.sentMs))}" + if (!sent && totalMs > 0) " • ${totalMs}ms" else "",
                         style = MaterialTheme.typography.labelSmall,
                         color = fg.copy(alpha = 0.55f),
                         modifier = Modifier.weight(1f),
@@ -784,6 +771,9 @@ private fun TranscriptBubble(entry: TranscriptEntry, timeFmt: SimpleDateFormat, 
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Emergency Compass View
+// ─────────────────────────────────────────────────────────────────────────────
 @Composable
 fun EmergencyCompassView(
     bearingDeg: Float,
@@ -867,15 +857,10 @@ fun EmergencyCompassView(
                         strokeWidth = 3.5.dp.toPx(),
                         cap = androidx.compose.ui.graphics.StrokeCap.Round
                     )
-                    drawCircle(
-                        color = Color.Red,
-                        radius = 4.dp.toPx(),
-                        center = center
-                    )
                 }
             }
 
-            Column {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     text = "EMERGENCY BEARING",
                     style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
@@ -887,7 +872,7 @@ fun EmergencyCompassView(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "Follow pointer to source",
+                    text = "Point phone top toward red arrow",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline
                 )
@@ -900,7 +885,12 @@ fun EmergencyCompassView(
 // Latency debug overlay
 // ─────────────────────────────────────────────────────────────────────────────
 @Composable
-private fun LatencyPanel(entries: List<TranscriptEntry>, expanded: Boolean, onToggle: () -> Unit) {
+private fun LatencyPanel(
+    entries: List<TranscriptEntry>,
+    telemetry: TelemetryState,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
     val lastRecv = entries.lastOrNull { it.direction == Direction.RECEIVED }
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -929,19 +919,21 @@ private fun LatencyPanel(entries: List<TranscriptEntry>, expanded: Boolean, onTo
                 )
             }
 
-            if (lastRecv != null && !expanded) {
-                val totalMs = if (lastRecv.totalE2eLatencyMs > 0L) {
-                    lastRecv.totalE2eLatencyMs
-                } else if (lastRecv.ttsStartedMs > 0 && lastRecv.micPauseDetectedMs > 0) {
-                    lastRecv.ttsStartedMs - lastRecv.micPauseDetectedMs
-                } else null
-                totalMs?.let {
-                    Text(
-                        text = "Total: $it ms",
-                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                        color = if (it < 1500L) Color(0xFF4CAF50) else Color(0xFFFF9800),
-                    )
-                }
+            if (!expanded) {
+                val sttMs = lastRecv?.deltaModelMs ?: telemetry.sttLatencyMs
+                val rtfVal = lastRecv?.sttRtf ?: telemetry.rtf
+                val netMs = lastRecv?.deltaNetworkMs ?: 0L
+                val ttsMs = lastRecv?.deltaTtsStartMs ?: telemetry.ttsLatencyMs
+                val totalE2E = lastRecv?.totalLatencyMs ?: (sttMs + netMs + ttsMs)
+
+                val rtfStr = if (rtfVal > 0f) String.format(Locale.US, " (%.2fx)", rtfVal) else ""
+                val chipText = "STT: ${sttMs}ms$rtfStr | Net: ${netMs}ms | TTS: ${ttsMs}ms | Total E2E: ${totalE2E}ms"
+
+                Text(
+                    text = chipText,
+                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                    color = if (totalE2E in 1L..1500L) Color(0xFF4CAF50) else Color(0xFFFF9800),
+                )
             }
         }
 
@@ -957,45 +949,38 @@ private fun LatencyPanel(entries: List<TranscriptEntry>, expanded: Boolean, onTo
                     .fillMaxWidth()
                     .padding(vertical = 4.dp),
             ) {
-                if (lastRecv == null) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    val targetEntry = lastRecv ?: entries.lastOrNull()
+                    val activeLang = targetEntry?.languageCode ?: telemetry.activeLanguage.ifBlank { "Indic" }
+                    val sttMs = targetEntry?.deltaModelMs ?: telemetry.sttLatencyMs
+                    val rtfVal = targetEntry?.sttRtf ?: telemetry.rtf
+                    val netMs = targetEntry?.deltaNetworkMs ?: 0L
+                    val ttsMs = targetEntry?.deltaTtsStartMs ?: telemetry.ttsLatencyMs
+                    val totalE2E = targetEntry?.totalLatencyMs ?: (sttMs + netMs + ttsMs)
+
                     Text(
-                        text = "No received speech segments yet.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.padding(12.dp),
+                        text = "Hackathon Evaluation Metrics Breakdown",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
                     )
-                } else {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
+                    LatencyRow(label = "1. STT Completion ($activeLang)", ms = sttMs)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("2. STT Real Time Factor (RTF)", style = MaterialTheme.typography.bodySmall)
                         Text(
-                            text = "Seq #${lastRecv.sequenceId} (${lastRecv.languageCode})",
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            text = String.format(Locale.US, "%.2fx", rtfVal),
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                            fontWeight = FontWeight.Medium,
                         )
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
-
-                        val sttMs = if (lastRecv.sttLatencyMs > 0L) lastRecv.sttLatencyMs else if (lastRecv.sttCompleteMs > 0 && lastRecv.micPauseDetectedMs > 0) {
-                            lastRecv.sttCompleteMs - lastRecv.micPauseDetectedMs
-                        } else 0L
-                        LatencyRow(label = "STT (mic pause → text)", ms = sttMs)
-
-                        val netMs = if (lastRecv.networkLatencyMs > 0L) lastRecv.networkLatencyMs else if (lastRecv.receivedMs > 0 && lastRecv.sentMs > 0) {
-                            lastRecv.receivedMs - lastRecv.sentMs
-                        } else 0L
-                        LatencyRow(label = "Transport (send → recv)", ms = netMs)
-
-                        val ttsMs = if (lastRecv.ttsLatencyMs > 0L) lastRecv.ttsLatencyMs else if (lastRecv.ttsStartedMs > 0 && lastRecv.receivedMs > 0) {
-                            lastRecv.ttsStartedMs - lastRecv.receivedMs
-                        } else 0L
-                        LatencyRow(label = "TTS synthesis (start → audio)", ms = ttsMs)
-
-                        val totalMs = if (lastRecv.totalE2eLatencyMs > 0L) lastRecv.totalE2eLatencyMs else (sttMs + netMs + ttsMs)
-                        HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
-                        LatencyRow(label = "TOTAL latency", ms = totalMs, bold = true)
                     }
+                    LatencyRow(label = "3. Network Transport (send → recv)", ms = netMs)
+                    LatencyRow(label = "4. TTS Startup (recv → speaker audio)", ms = ttsMs)
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
+                    LatencyRow(label = "5. Total End-to-End (E2E) Delta", ms = totalE2E, bold = true)
                 }
             }
         }
@@ -1019,45 +1004,3 @@ private fun LatencyRow(label: String, ms: Long, bold: Boolean = false) {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Live Telemetry Overlay
-// ─────────────────────────────────────────────────────────────────────────────
-@Composable
-private fun TelemetryOverlay(
-    telemetry: TelemetryState,
-    modifier: Modifier = Modifier,
-) {
-    if (!telemetry.hasData) return
-
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)),
-        shadowElevation = 4.dp,
-        modifier = modifier,
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            Text(
-                text = "STT: ${telemetry.sttLatencyMs}ms | RTF: ${String.format(Locale.US, "%.2f", telemetry.rtf)}",
-                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = "TTS: ${telemetry.ttsLatencyMs}ms | E2E: ${telemetry.e2eLatencyMs}ms",
-                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = "Payload: ${telemetry.payloadBytes}B | Net: ${telemetry.transport.ifBlank { "P2P" }}",
-                style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-        }
-    }
-}

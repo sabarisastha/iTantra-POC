@@ -24,7 +24,7 @@ data class PcmChunk(
     val isEos: Boolean = false
 )
 
-class AudioPlayer {
+class AudioPlayer(private val context: android.content.Context? = null) {
 
     @Volatile
     private var audioTrack: AudioTrack? = null

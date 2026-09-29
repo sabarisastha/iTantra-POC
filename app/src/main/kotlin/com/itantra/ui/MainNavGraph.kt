@@ -14,11 +14,11 @@ import com.itantra.ui.setup.LanguageSelectionScreen
 import com.itantra.ui.setup.ModelReadinessScreen
 import kotlinx.coroutines.flow.StateFlow
 
-private const val ROUTE_SPLASH  = "splash"
+private const val ROUTE_SPLASH   = "splash"
 private const val ROUTE_LANGUAGE = "language"
-private const val ROUTE_MODELS  = "models"
-private const val ROUTE_HOME    = "home"
-private const val ROUTE_SESSION = "session"
+private const val ROUTE_MODELS   = "models"
+private const val ROUTE_HOME     = "home"
+private const val ROUTE_SESSION  = "session"
 
 @Composable
 fun MainNavGraph(
@@ -26,7 +26,7 @@ fun MainNavGraph(
     sessionController: SessionController,
     modelManager: ModelManager,
     permissionsGranted: StateFlow<Boolean>,
-    historyDao: com.itantra.db.HistoryDao
+    historyDao: com.itantra.db.HistoryDao? = null,
 ) {
     val navController = rememberNavController()
 
@@ -67,7 +67,7 @@ fun MainNavGraph(
                 modelManager        = modelManager,
                 onNavigateToSession = { navController.navigate(ROUTE_SESSION) },
                 permissionsGranted  = permissionsGranted,
-                historyDao = historyDao
+                historyDao          = historyDao,
             )
         }
         composable(ROUTE_SESSION) {
@@ -78,5 +78,3 @@ fun MainNavGraph(
         }
     }
 }
-
-

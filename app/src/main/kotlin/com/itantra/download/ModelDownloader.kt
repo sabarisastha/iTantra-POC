@@ -69,10 +69,6 @@ class ModelDownloader(private val context: Context) {
         return File(modelsDir, "$type/shared/$filename").also { it.parentFile?.mkdirs() }
     }
 
-    fun sharedModelFile(sharedId: String, filename: String): File {
-        return File(modelsDir, "tts/shared/$sharedId/$filename").also { it.parentFile?.mkdirs() }
-    }
-
     /**
      * Synchronously downloads [url] to [destFile] using atomic write (.tmp -> rename).
      */
@@ -88,15 +84,6 @@ class ModelDownloader(private val context: Context) {
         destFile.parentFile?.mkdirs()
 
         val connection = URL(url).openConnection() as HttpURLConnection
-        if (connection is javax.net.ssl.HttpsURLConnection && android.os.Build.VERSION.SDK_INT < 24) {
-            try {
-                val sc = javax.net.ssl.SSLContext.getInstance("TLSv1.2")
-                sc.init(null, null, null)
-                connection.sslSocketFactory = sc.socketFactory
-            } catch (e: Exception) {
-                android.util.Log.w("ModelDownloader", "TLS 1.2 init failed: ${e.message}")
-            }
-        }
         connection.connectTimeout = 30_000
         connection.readTimeout = 120_000
         connection.instanceFollowRedirects = true

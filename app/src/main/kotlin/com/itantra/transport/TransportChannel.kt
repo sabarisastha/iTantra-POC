@@ -15,7 +15,17 @@ interface TransportChannel {
     /** Emits every [Payload] received from the remote peer. Hot, never completes. */
     val onPayloadReceived: Flow<Payload>
 
-    /** Emits every raw PCM audio chunk received from the remote peer. */
+    /**
+     * Emits every raw PCM audio chunk received from the remote peer.
+     *
+     * @deprecated Phone Mode now transmits text via VAD+STT instead of raw PCM.
+     * This flow is no longer collected by [SessionController]. Retained for protocol
+     * compatibility only; do not add new consumers.
+     */
+    @Deprecated(
+        message = "Phone Mode uses VAD-gated STT → text payloads. Raw PCM streaming is removed.",
+        level = DeprecationLevel.WARNING
+    )
     val onPcmReceived: Flow<FloatArray>
 
     /** Live connection state — observed by the UI layer. */
@@ -39,7 +49,17 @@ interface TransportChannel {
      */
     suspend fun send(payload: Payload)
     
-    /** Send raw PCM over the transport */
+    /**
+     * Send raw PCM over the transport.
+     *
+     * @deprecated Phone Mode uses VAD-gated STT → text [Payload] instead of raw PCM.
+     * This method is no longer called by [SessionController]. Retained for protocol
+     * compatibility only; do not add new call-sites.
+     */
+    @Deprecated(
+        message = "Phone Mode uses VAD-gated STT → text payloads. Raw PCM streaming is removed.",
+        level = DeprecationLevel.WARNING
+    )
     suspend fun sendPcm(pcm: FloatArray)
 
     /**
@@ -58,7 +78,7 @@ sealed class ConnectionState {
     data object Idle : ConnectionState()
     data object Discovering : ConnectionState()
     data object Connecting : ConnectionState()
-    data class Connected(val peerName: String, val isGroupOwner: Boolean, val peerAddress: String = "") : ConnectionState()
+    data class Connected(val peerName: String, val isGroupOwner: Boolean) : ConnectionState()
     data class Error(val message: String) : ConnectionState()
     data class Disconnected(val reason: String) : ConnectionState()
 }

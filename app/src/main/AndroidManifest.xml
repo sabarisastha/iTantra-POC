@@ -3,59 +3,29 @@
     android:installLocation="auto"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- ======================================================================
-         Wi-Fi Direct (WifiP2pManager) — peer discovery + group formation
-         ====================================================================== -->
+    <!-- Permissions -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
-
-    <!--
-        INTERNET is required for java.net.Socket/ServerSocket, even when the
-        TCP connection is entirely within the local Wi-Fi Direct P2P group
-        network (no actual internet reachability). Android requires this
-        permission for *any* socket usage. Judges: this does NOT mean the app
-        makes internet calls — it is fully offline by design.
-    -->
     <uses-permission android:name="android.permission.INTERNET" />
-
-    <!-- Android 13+ (API 33+): Wi-Fi Direct peer discovery -->
-    <!-- NOTE: Do NOT add neverForLocation here — it silently breaks WifiP2pManager.discoverPeers() on most OEM devices -->
     <uses-permission
         android:name="android.permission.NEARBY_WIFI_DEVICES"
         tools:targetApi="tiramisu" />
-
-    <!-- ACCESS_FINE_LOCATION is also needed on API 33+ for Wi-Fi Direct group formation on some OEMs -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-
-
-
-    <uses-feature
-        android:name="android.hardware.wifi.direct"
-        android:required="false" />
-
-    <!-- ======================================================================
-         Audio capture (AudioRecord) — microphone for STT input
-         ====================================================================== -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <uses-feature
-        android:name="android.hardware.microphone"
-        android:required="false" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
-    <!-- ======================================================================
-         Bluetooth Classic RFCOMM — primary offline transport. Wi-Fi Direct remains
-         available as a user-selected fallback.
-         ====================================================================== -->
-    <!-- Legacy Bluetooth (API ≤ 30) -->
+    <!-- Legacy & Modern Bluetooth -->
     <uses-permission
         android:name="android.permission.BLUETOOTH"
         android:maxSdkVersion="30" />
     <uses-permission
-         android:name="android.permission.BLUETOOTH_ADMIN"
+        android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30" />
-    <!-- Modern Bluetooth (API 31+) -->
     <uses-permission
         android:name="android.permission.BLUETOOTH_SCAN"
         android:usesPermissionFlags="neverForLocation"
@@ -66,12 +36,19 @@
     <uses-permission
         android:name="android.permission.BLUETOOTH_ADVERTISE"
         tools:targetApi="s" />
+
+    <uses-feature
+        android:name="android.hardware.wifi.direct"
+        android:required="false" />
+    <uses-feature
+        android:name="android.hardware.microphone"
+        android:required="false" />
     <uses-feature
         android:name="android.hardware.bluetooth"
         android:required="false" />
 
     <application
-        android:extractNativeLibs="true"
+        android:extractNativeLibs="false"
         android:name="com.itantra.iTantraApplication"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"

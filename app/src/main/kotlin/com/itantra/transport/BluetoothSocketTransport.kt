@@ -25,8 +25,6 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import com.itantra.transport.binary.BinaryDecoder
-import com.itantra.transport.binary.BinaryEncoder
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -75,10 +73,24 @@ class BluetoothSocketTransport(
     private fun hasBluetoothPermissions(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED
         } else {
             ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH) == PackageManager.PERMISSION_GRANTED &&
             ContextCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_ADMIN) == PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    fun requestDiscoverability() {
+        if (!hasBluetoothPermissions()) return
+        try {
+            val intent = Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE).apply {
+                putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, 300)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to request discoverability", e)
         }
     }
 
@@ -199,8 +211,7 @@ class BluetoothSocketTransport(
         serverSocket = null
         acceptJob?.cancel()
         
-        val address = runCatching { socket.remoteDevice?.address }.getOrNull() ?: ""
-        _connectionState.value = ConnectionState.Connected(peerName, isGroupOwner, address)
+        _connectionState.value = ConnectionState.Connected(peerName, isGroupOwner)
         Log.d(TAG, "Connected to $peerName (isServer=$isGroupOwner)")
         
         receiveJob?.cancel()
@@ -216,18 +227,10 @@ class BluetoothSocketTransport(
                 break
             }
             when (frame.first) {
-                FrameType.BINARY_PAYLOAD -> {
-                    val payload = BinaryDecoder.decode(frame.second)?.copy(receivedTimestampMs = System.currentTimeMillis())
-                    if (payload != null) {
-                        _onPayloadReceived.emit(payload)
-                    } else {
-                        Log.e(TAG, "Binary decode failed for frame size=${frame.second.size}")
-                    }
-                }
                 FrameType.JSON_PAYLOAD -> {
                     val str = String(frame.second, Charsets.UTF_8)
                     runCatching {
-                        val payload = json.decodeFromString<Payload>(str).copy(receivedTimestampMs = System.currentTimeMillis())
+                        val payload = json.decodeFromString<Payload>(str)
                         _onPayloadReceived.emit(payload)
                     }.onFailure { Log.e(TAG, "JSON parse error", it) }
                 }
@@ -247,8 +250,8 @@ class BluetoothSocketTransport(
 
     override suspend fun send(payload: Payload) {
         val socket = framedSocket ?: throw IllegalStateException("Not connected")
-        val encoded = BinaryEncoder.encode(payload)
-        socket.writeFrame(FrameType.BINARY_PAYLOAD, encoded)
+        val encoded = json.encodeToString(payload).toByteArray(Charsets.UTF_8)
+        socket.writeFrame(FrameType.JSON_PAYLOAD, encoded)
     }
 
     override suspend fun sendPcm(pcm: FloatArray) {
@@ -296,7 +299,7 @@ class BluetoothSocketTransport(
             @SuppressLint("MissingPermission")
             override fun onReceive(c: Context, intent: Intent) {
                 when (intent.action) {
-                    BluetoothDevice.ACTION_FOUND -> {
+                    BluetoothDevice.ACTION_FOUND, BluetoothDevice.ACTION_NAME_CHANGED -> {
                         val device = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                             intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java)
                         } else {
@@ -304,11 +307,23 @@ class BluetoothSocketTransport(
                             intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                         }
                         if (device != null && hasBluetoothPermissions()) {
-                            val name = device.name ?: "Unknown"
+                            val extraName = intent.getStringExtra(BluetoothDevice.EXTRA_NAME)
+                            val devName = device.name
+                            val resolvedName = when {
+                                !extraName.isNullOrBlank() -> extraName
+                                !devName.isNullOrBlank() -> devName
+                                else -> null
+                            }
                             val address = device.address
                             val currentList = _discoveredDevices.value.toMutableList()
-                            if (currentList.none { it.address == address }) {
-                                currentList.add(DiscoveredDevice(name, address))
+                            val existingIndex = currentList.indexOfFirst { it.address == address }
+                            if (existingIndex >= 0) {
+                                if (resolvedName != null && (currentList[existingIndex].name == "Unknown" || currentList[existingIndex].name != resolvedName)) {
+                                    currentList[existingIndex] = DiscoveredDevice(resolvedName, address)
+                                    _discoveredDevices.value = currentList
+                                }
+                            } else {
+                                currentList.add(DiscoveredDevice(resolvedName ?: "Unknown", address))
                                 _discoveredDevices.value = currentList
                             }
                         }
@@ -316,7 +331,10 @@ class BluetoothSocketTransport(
                 }
             }
         }
-        val filter = IntentFilter(BluetoothDevice.ACTION_FOUND)
+        val filter = IntentFilter().apply {
+            addAction(BluetoothDevice.ACTION_FOUND)
+            addAction(BluetoothDevice.ACTION_NAME_CHANGED)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
         } else {

@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.itantra.db.HistoryEntity
 import com.itantra.model.ModelManager
 import com.itantra.model.ModelState
 import com.itantra.session.SessionController
@@ -12,6 +13,7 @@ import com.itantra.transport.ConnectionState
 import com.itantra.transport.DiscoveredDevice
 import com.itantra.transport.TransportManager
 import com.itantra.transport.TransportKind
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -28,10 +30,12 @@ class HomeViewModel(
     private val sessionController: SessionController,
     private val modelManager: ModelManager,
     permissionsGranted: StateFlow<Boolean>,
-    private val historyDao: com.itantra.db.HistoryDao
+    private val historyDao: com.itantra.db.HistoryDao? = null
 ) : ViewModel() {
 
-    val history = historyDao.getAllHistory().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val history: StateFlow<List<HistoryEntity>> = historyDao?.getAllHistory()
+        ?.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        ?: MutableStateFlow(emptyList())
 
     val connectionState: StateFlow<ConnectionState> = transport.connectionState
         .onEach { state ->
@@ -129,20 +133,20 @@ class HomeViewModel(
     fun dismissWifiDialog() { _wifiOffDialog.value = false }
 
     fun clearHistory() {
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            historyDao.clearHistory()
+        viewModelScope.launch(Dispatchers.IO) {
+            historyDao?.clearHistory()
         }
     }
 
     fun updatePeerAlias(peerKey: String, alias: String?) {
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            historyDao.updateAlias(peerKey, alias?.trim()?.ifBlank { null })
+        viewModelScope.launch(Dispatchers.IO) {
+            historyDao?.updateAlias(peerKey, alias?.trim()?.ifBlank { null })
         }
     }
 
     fun updatePeerAliasById(id: Long, alias: String?) {
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            historyDao.updateAliasById(id, alias?.trim()?.ifBlank { null })
+        viewModelScope.launch(Dispatchers.IO) {
+            historyDao?.updateAliasById(id, alias?.trim()?.ifBlank { null })
         }
     }
 
@@ -152,7 +156,7 @@ class HomeViewModel(
             sessionController: SessionController,
             modelManager: ModelManager,
             permissionsGranted: StateFlow<Boolean>,
-            historyDao: com.itantra.db.HistoryDao
+            historyDao: com.itantra.db.HistoryDao? = null
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =

@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlin.math.sqrt
 
 class AudioRecorder {
 
@@ -26,7 +27,7 @@ class AudioRecorder {
 
     @SuppressLint("MissingPermission")
     fun startRecording(
-        audioSource: Int = MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+        audioSource: Int = MediaRecorder.AudioSource.MIC,
         onChunk: (FloatArray) -> Unit
     ) {
         startRecordingInternal(audioSource) { shortBuf, read ->
@@ -46,7 +47,7 @@ class AudioRecorder {
      */
     @SuppressLint("MissingPermission")
     fun startRecordingShorts(
-        audioSource: Int = MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+        audioSource: Int = MediaRecorder.AudioSource.MIC,
         onChunk: (ShortArray) -> Unit
     ) {
         startRecordingInternal(audioSource) { shortBuf, read ->
@@ -56,7 +57,7 @@ class AudioRecorder {
 
     @SuppressLint("MissingPermission")
     private fun startRecordingInternal(
-        audioSource: Int = MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+        audioSource: Int = MediaRecorder.AudioSource.MIC,
         onRawChunk: (ShortArray, Int) -> Unit
     ) {
         if (recording) {
@@ -67,39 +68,45 @@ class AudioRecorder {
         val minBuf = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING)
         val bufSize = maxOf(minBuf, 4096)
 
-        var recordSource = audioSource
-        var recorder = AudioRecord(
-            recordSource,
-            SAMPLE_RATE,
-            CHANNEL,
-            ENCODING,
-            bufSize
-        )
+        val audioSourcesToTry = intArrayOf(
+            audioSource,
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            MediaRecorder.AudioSource.DEFAULT
+        ).distinct().toIntArray()
 
-        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "INIT: AudioRecord failed to initialize with source $recordSource")
-            recorder.release()
-            if (recordSource != MediaRecorder.AudioSource.MIC) {
-                Log.w(TAG, "Retrying AudioRecord initialization with MediaRecorder.AudioSource.MIC fallback")
-                recordSource = MediaRecorder.AudioSource.MIC
-                recorder = AudioRecord(
-                    recordSource,
+        var recorder: AudioRecord? = null
+        var selectedSource = -1
+
+        for (src in audioSourcesToTry) {
+            try {
+                val rec = AudioRecord(
+                    src,
                     SAMPLE_RATE,
                     CHANNEL,
                     ENCODING,
                     bufSize
                 )
+                if (rec.state == AudioRecord.STATE_INITIALIZED) {
+                    recorder = rec
+                    selectedSource = src
+                    break
+                } else {
+                    rec.release()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "AudioRecord init failed for source $src: ${e.message}")
             }
         }
 
-        if (recorder.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e(TAG, "INIT: AudioRecord failed to initialize with fallback source $recordSource")
-            recorder.release()
+        if (recorder == null || selectedSource == -1) {
+            Log.e(TAG, "INIT: AudioRecord failed to initialize with all candidate audio sources!")
             return
         }
 
         audioRecord = recorder
-        Log.i(TAG, "START: AudioRecord initialized successfully with source $recordSource")
+        Log.i(TAG, "START: AudioRecord initialized successfully with source $selectedSource")
         audioRecord?.startRecording()
         recording = true
 
@@ -112,7 +119,23 @@ class AudioRecorder {
             while (recording) {
                 val read = audioRecord?.read(shortBuf, 0, shortBuf.size) ?: break
                 if (read > 0) {
-                    Log.v(TAG, "READ: read $read samples")
+                    var sumSq = 0.0
+                    for (i in 0 until read) {
+                        val s = shortBuf[i].toDouble()
+                        sumSq += s * s
+                    }
+                    val rms = sqrt(sumSq / read)
+
+                    // If chunk RMS is faint (e.g. low hardware gain), apply soft auto-gain
+                    if (rms in 0.1..300.0) {
+                        val gain = 4.0f
+                        for (i in 0 until read) {
+                            val scaled = (shortBuf[i] * gain).toInt()
+                            shortBuf[i] = scaled.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+                        }
+                    }
+
+                    Log.v(TAG, "READ: read $read samples (rawRms=%.2f)".format(rms))
                     onRawChunk(shortBuf, read)
                 }
             }

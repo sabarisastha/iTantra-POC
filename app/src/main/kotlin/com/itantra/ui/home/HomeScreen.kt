@@ -9,35 +9,50 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.Devices
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.filled.WifiFind
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.itantra.db.HistoryEntity
 import com.itantra.model.ModelManager
 import com.itantra.model.ModelState
 import com.itantra.session.SessionController
 import com.itantra.session.SupportedLanguage
 import com.itantra.transport.ConnectionState
 import com.itantra.transport.DiscoveredDevice
-import com.itantra.transport.TransportManager
 import com.itantra.transport.TransportKind
-import com.itantra.db.HistoryEntity
-import kotlinx.coroutines.flow.StateFlow
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.itantra.transport.TransportManager
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.flow.StateFlow
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,19 +62,19 @@ fun HomeScreen(
     modelManager: ModelManager,
     onNavigateToSession: () -> Unit,
     permissionsGranted: StateFlow<Boolean>,
-    historyDao: com.itantra.db.HistoryDao,
+    historyDao: com.itantra.db.HistoryDao? = null,
     vm: HomeViewModel = viewModel(factory = HomeViewModel.factory(transport, sessionController, modelManager, permissionsGranted, historyDao)),
 ) {
-    val state    by vm.connectionState.collectAsStateWithLifecycle()
-    val devices  by vm.discoveredDevices.collectAsStateWithLifecycle()
+    val state           by vm.connectionState.collectAsStateWithLifecycle()
+    val devices         by vm.discoveredDevices.collectAsStateWithLifecycle()
     val activeTransport by vm.activeTransport.collectAsStateWithLifecycle()
-    val wifiOff  by vm.wifiOffDialog.collectAsStateWithLifecycle()
-    val language by vm.selectedLanguage.collectAsStateWithLifecycle()
+    val wifiOff         by vm.wifiOffDialog.collectAsStateWithLifecycle()
+    val language        by vm.selectedLanguage.collectAsStateWithLifecycle()
     
-    val sttState by vm.sttState.collectAsStateWithLifecycle()
-    val ttsState by vm.ttsState.collectAsStateWithLifecycle()
+    val sttState          by vm.sttState.collectAsStateWithLifecycle()
+    val ttsState          by vm.ttsState.collectAsStateWithLifecycle()
     val isModelDownloaded by vm.isModelDownloaded.collectAsStateWithLifecycle()
-    val history by vm.history.collectAsStateWithLifecycle()
+    val history           by vm.history.collectAsStateWithLifecycle()
 
     var langMenuExpanded by remember { mutableStateOf(false) }
     var currentTab by remember { mutableStateOf(0) }
@@ -200,7 +215,7 @@ fun HomeContent(
                                 .clip(RoundedCornerShape(50))
                                 .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
                                 .clickable(enabled = canSwitch && !selected) { onTransportSelect(kind) }
-                                .padding(horizontal = 14.dp, vertical = 6.dp),
+                                .padding(horizontal = 16.dp, vertical = 6.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
@@ -214,67 +229,42 @@ fun HomeContent(
             }
         }
 
-        // Language Dropdown & Quick Status
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        // Language Dropdown
+        Box(modifier = Modifier.align(Alignment.End)) {
             Surface(
                 shape = RoundedCornerShape(12.dp),
-                color = if (isModelDownloaded) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f) else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 2.dp,
+                modifier = Modifier.clickable { onLangMenuToggle(true) }
             ) {
-                Row(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = if (isModelDownloaded) Icons.Default.CheckCircle else Icons.Default.CloudDownload,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = if (isModelDownloaded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        text = if (isModelDownloaded) "OFFLINE READY" else "MODELS PENDING",
-                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
-                        color = if (isModelDownloaded) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
-                    )
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(language.displayName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.width(8.dp))
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-
-            Box {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 1.dp,
-                    modifier = Modifier.clickable { onLangMenuToggle(true) }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(language.displayName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                        Spacer(Modifier.width(6.dp))
-                        Icon(Icons.Default.ArrowDropDown, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-                DropdownMenu(expanded = langMenuExpanded, onDismissRequest = { onLangMenuToggle(false) }) {
-                    SupportedLanguage.entries.forEach { lang ->
-                        DropdownMenuItem(
-                            text = { Text("${lang.displayName} (${lang.code})") },
-                            leadingIcon = { if (lang == language) Icon(Icons.Default.Check, null) },
-                            onClick = { onLanguageSelect(lang); onLangMenuToggle(false) },
-                        )
-                    }
+            DropdownMenu(expanded = langMenuExpanded, onDismissRequest = { onLangMenuToggle(false) }) {
+                SupportedLanguage.entries.forEach { lang ->
+                    DropdownMenuItem(
+                        text = { Text("${lang.displayName} (${lang.code})") },
+                        leadingIcon = { if (lang == language) Icon(Icons.Default.Check, null) },
+                        onClick = { onLanguageSelect(lang); onLangMenuToggle(false) },
+                    )
                 }
             }
         }
 
-        // Nearby Devices Section Header
+        Spacer(modifier = Modifier.height(4.dp))
+        
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Nearby Devices (${activeTransport.label})", style = MaterialTheme.typography.titleMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant))
+            Text("Nearby Devices", style = MaterialTheme.typography.titleMedium.copy(color = MaterialTheme.colorScheme.onSurfaceVariant))
             IconButton(onClick = onRefresh) {
                 Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = MaterialTheme.colorScheme.primary)
             }
@@ -283,10 +273,19 @@ fun HomeContent(
         // Device List
         if (devices.isEmpty()) {
             Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                ) {
                     Icon(Icons.Default.WifiFind, contentDescription = null, modifier = Modifier.size(56.dp), tint = MaterialTheme.colorScheme.outline)
-                    Text("No devices found nearby", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.outline)
-                    Text("Ensure peer device has ${activeTransport.label} active.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.outline)
+                    Text("No devices found", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text(
+                        text = "1. Ensure ${activeTransport.label} & Location (GPS) are turned ON.\n2. For Bluetooth phone-to-phone, pair devices once in Android Bluetooth settings.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
                 }
             }
         } else {
@@ -294,7 +293,6 @@ fun HomeContent(
                 items(devices, key = { it.address }) { device ->
                     PeerListItem(
                         device = device,
-                        transportLabel = activeTransport.label,
                         isConnected = state is ConnectionState.Connected,
                         isConnecting = state is ConnectionState.Connecting,
                         isReady = isModelDownloaded,
@@ -307,14 +305,7 @@ fun HomeContent(
 }
 
 @Composable
-fun PeerListItem(
-    device: DiscoveredDevice,
-    transportLabel: String,
-    isConnected: Boolean,
-    isConnecting: Boolean,
-    isReady: Boolean,
-    onConnect: () -> Unit
-) {
+fun PeerListItem(device: DiscoveredDevice, isConnected: Boolean, isConnecting: Boolean, isReady: Boolean, onConnect: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surface,
@@ -332,11 +323,7 @@ fun PeerListItem(
             Spacer(Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(device.name, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                Text(
-                    text = if (isConnected) "Connected • $transportLabel" else "Available • $transportLabel",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
-                )
+                Text(if (isConnected) "Connected" else "Available", style = MaterialTheme.typography.bodySmall, color = if(isConnected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline)
             }
             Spacer(Modifier.width(12.dp))
             Button(
@@ -357,56 +344,39 @@ fun PeerListItem(
 @Composable
 fun HistoryContent(
     history: List<HistoryEntity>,
-    onUpdateAlias: (HistoryEntity, String) -> Unit = { _, _ -> }
+    onUpdateAlias: (HistoryEntity, String) -> Unit = { _, _ -> },
 ) {
-    val df = remember { SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault()) }
     var editingItem by remember { mutableStateOf<HistoryEntity?>(null) }
     var aliasInput by remember { mutableStateOf("") }
+    val df = remember { SimpleDateFormat("MMM dd, yyyy HH:mm", Locale.getDefault()) }
 
     if (editingItem != null) {
-        val target = editingItem!!
         AlertDialog(
             onDismissRequest = { editingItem = null },
-            title = { Text("Edit Device Alias") },
+            title = { Text("Set Device Alias") },
             text = {
-                Column {
-                    Text(
-                        "Set a local-only nickname for \"${target.peerName}\".",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(12.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Assign a name to ${editingItem!!.peerName}:", style = MaterialTheme.typography.bodyMedium)
                     OutlinedTextField(
                         value = aliasInput,
                         onValueChange = { aliasInput = it },
-                        label = { Text("Alias / Nickname") },
-                        placeholder = { Text("e.g. Base Station / Team Alpha") },
+                        placeholder = { Text("e.g. Base Station / Unit 2") },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
             },
             confirmButton = {
-                Button(onClick = {
-                    onUpdateAlias(target, aliasInput)
+                TextButton(onClick = {
+                    onUpdateAlias(editingItem!!, aliasInput)
                     editingItem = null
                 }) {
                     Text("Save")
                 }
             },
             dismissButton = {
-                Row {
-                    if (!target.alias.isNullOrBlank()) {
-                        TextButton(onClick = {
-                            onUpdateAlias(target, "")
-                            editingItem = null
-                        }) {
-                            Text("Clear Alias", color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                    TextButton(onClick = { editingItem = null }) {
-                        Text("Cancel")
-                    }
+                TextButton(onClick = { editingItem = null }) {
+                    Text("Cancel")
                 }
             }
         )
@@ -511,14 +481,14 @@ fun HistoryContent(
 @Composable
 fun SettingsContent(
     language: SupportedLanguage,
-    activeTransport: TransportKind,
-    connectionState: ConnectionState,
+    activeTransport: TransportKind = TransportKind.WIFI_DIRECT,
+    connectionState: ConnectionState = ConnectionState.Idle,
     isDownloaded: Boolean,
     sttState: ModelState,
     ttsState: ModelState,
-    onTransportSelect: (TransportKind) -> Unit,
+    onTransportSelect: (TransportKind) -> Unit = {},
     onDownload: () -> Unit,
-    onClearHistory: () -> Unit
+    onClearHistory: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val hasMic = ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED

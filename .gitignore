@@ -13,4 +13,6 @@ logcat_test.txt
 .kotlin
 app/build
 
+models/
 *.hprof
+

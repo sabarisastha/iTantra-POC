@@ -1,32 +1,20 @@
 package com.itantra.session
 
-import android.content.Context
 import android.util.Log
-import com.itantra.audio.DutyCycleInfo
-import com.itantra.audio.DutyCycleScheduler
 import com.itantra.stt.RecognizedSentence
 import com.itantra.stt.SpeechToTextEngine
-import com.itantra.telemetry.TelemetryState
 import com.itantra.transport.ConnectionState
 import com.itantra.transport.Payload
 import com.itantra.transport.PayloadType
 import com.itantra.transport.TransportChannel
-import com.itantra.transport.TransportKind
 import com.itantra.transport.TransportManager
 import com.itantra.tts.TextToSpeechEngine
-import com.itantra.utils.LiveLocationState
-import com.itantra.utils.LocationHelper
-import com.itantra.utils.LocationInfo
-import com.itantra.utils.MovementState
-import com.itantra.utils.MovementTracker
-import com.itantra.utils.RelativeDirection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,9 +22,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import com.itantra.transport.binary.BinaryEncoder
 import java.util.UUID
 
 private const val TAG = "ITANTRA-SESSION"
@@ -51,8 +36,12 @@ class SessionController(
     private val ttsEngine: TextToSpeechEngine,
     val transport: TransportChannel,
     private val historyDao: com.itantra.db.HistoryDao? = null,
-    private val context: Context? = null,
+    val context: android.content.Context? = null,
 ) {
+    val dutyCycleScheduler: com.itantra.audio.DutyCycleScheduler? =
+        context?.let { com.itantra.audio.DutyCycleScheduler(it) }
+    val dutyCycleInfo: StateFlow<com.itantra.audio.DutyCycleInfo>? =
+        dutyCycleScheduler?.dutyCycleInfo
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     val localPeerId: String = UUID.randomUUID().toString().take(8)
@@ -75,46 +64,50 @@ class SessionController(
     private val _sessionValidated = MutableStateFlow(false)
     val sessionValidated: StateFlow<Boolean> = _sessionValidated.asStateFlow()
 
-    private val _telemetry = MutableStateFlow(TelemetryState())
-    val telemetry: StateFlow<TelemetryState> = _telemetry.asStateFlow()
+    private val _telemetry = MutableStateFlow(com.itantra.telemetry.TelemetryState())
+    val telemetry: StateFlow<com.itantra.telemetry.TelemetryState> = _telemetry.asStateFlow()
 
-    private val _liveLocationState = MutableStateFlow(LiveLocationState())
-    val liveLocationState: StateFlow<LiveLocationState> = _liveLocationState.asStateFlow()
-
-    val dutyCycleScheduler: DutyCycleScheduler = DutyCycleScheduler(context)
-    val dutyCycleInfo: StateFlow<DutyCycleInfo> = dutyCycleScheduler.dutyCycleInfo
-
-    private val json = Json { ignoreUnknownKeys = true }
-
-    private fun getTransportTypeLabel(): String =
-        if ((transport as? TransportManager)?.activeKind?.value == TransportKind.WIFI_DIRECT) "WiFi" else "BT"
-
-    private val localMovementTracker = MovementTracker()
-    private val peerMovementTracker = MovementTracker()
-    private var locationSyncJob: Job? = null
+    private val _liveLocationState = MutableStateFlow(com.itantra.utils.LiveLocationState())
+    val liveLocationState: StateFlow<com.itantra.utils.LiveLocationState> = _liveLocationState.asStateFlow()
 
     @Volatile private var localFloorRequestTimestamp: Long = 0L
     @Volatile private var localModeChangeTimestamp: Long = 0L
     private var floorTimeoutJob: Job? = null
     private var heartbeatJob: Job? = null
-
-    // Phone mode audio streams
-    private var phoneAudioRecorder: com.itantra.audio.AudioRecorder? = null
-    private var phoneAudioPlayer: com.itantra.audio.AudioPlayer? = null
-    private var pcmSendChannel: Channel<FloatArray>? = null
-    private var phoneTxJob: Job? = null
-
-    // History and Metrics Tracking
-    private var sessionStartMs: Long = 0L
-    private var connectedPeerName: String = "Connected Peer"
-    private var connectedPeerAddress: String = ""
-    private var connectingPeerName: String? = null
+    
+    // No raw PCM fields — Phone Mode uses VAD-gated STT (same as PTT, but no floor control)
 
     init {
-        monitorConnectionState()
+        Log.d(TAG, "SessionController initialized localPeerId=$localPeerId")
+        ttsEngine.onUtteranceStartedListener = { sequenceId, startedMs ->
+            handleUtteranceStarted(sequenceId, startedMs)
+        }
+        collectOutgoing()
         collectIncoming()
-        collectStt()
+        monitorConnectionState()
     }
+
+    private fun handleUtteranceStarted(sequenceId: Int, startedMs: Long) {
+        _transcript.update { list ->
+            list.map { entry ->
+                if (entry.sequenceId == sequenceId && entry.direction == Direction.RECEIVED) {
+                    val ttsLatency = if (entry.receivedMs > 0L) (startedMs - entry.receivedMs).coerceAtLeast(1L) else 0L
+                    val netMs = if (entry.sentMs > 0L && entry.receivedMs > 0L) (entry.receivedMs - entry.sentMs).coerceAtLeast(0L) else 0L
+                    val sttMs = if (entry.sttDurationMs > 0L) entry.sttDurationMs else 0L
+                    val totalE2E = sttMs + netMs + ttsLatency
+                    _telemetry.value = _telemetry.value.copy(
+                        ttsLatencyMs = ttsLatency,
+                        e2eLatencyMs = totalE2E
+                    )
+                    entry.copy(ttsStartedMs = startedMs)
+                } else {
+                    entry
+                }
+            }
+        }
+    }
+
+    // ── Connection monitoring ─────────────────────────────────────────────────
 
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
@@ -144,192 +137,31 @@ class SessionController(
         }
     }
 
-    private fun startLocationSync() {
-        locationSyncJob?.cancel()
-        locationSyncJob = scope.launch(Dispatchers.IO) {
-            // Initial sync immediately after handshake
-            syncLocalLocation()
-            while (isSessionActive()) {
-                delay(15_000L)
-                if (!isSessionActive()) break
-                syncLocalLocation()
-            }
-        }
-    }
-
-    private suspend fun syncLocalLocation() {
-        if (context == null) return
-        val result = LocationHelper.getCurrentLocation(context, timeoutMs = 2500L)
-        val loc = result.locationInfo ?: return
-        localMovementTracker.addFix(loc)
-        updateLiveLocationState(local = loc)
-        runCatching {
-            transport.send(
-                Payload(
-                    type = PayloadType.LOCATION_UPDATE,
-                    senderId = localPeerId,
-                    sentTimestampMs = System.currentTimeMillis(),
-                    latitude = loc.latitude,
-                    longitude = loc.longitude,
-                    accuracy = loc.accuracyMeters,
-                    locationTimestampMs = loc.timestampMs,
-                    locationStatus = "Location available",
-                )
-            )
-        }.onFailure { e ->
-            Log.w(TAG, "Failed to send LOCATION_UPDATE: ${e.message}")
-        }
-    }
-
-    private fun stopLocationSync() {
-        locationSyncJob?.cancel()
-        locationSyncJob = null
-        localMovementTracker.reset()
-        peerMovementTracker.reset()
-        _liveLocationState.value = LiveLocationState()
-    }
-
-    private fun updateLiveLocationState(
-        local: LocationInfo? = _liveLocationState.value.localLocation,
-        peer: LocationInfo? = _liveLocationState.value.peerLocation,
-        peerUpdateMs: Long = _liveLocationState.value.lastPeerUpdateMs,
-    ) {
-        val distance = if (local != null && peer != null) {
-            LocationHelper.calculateDistanceMeters(local.latitude, local.longitude, peer.latitude, peer.longitude)
-        } else null
-
-        val localBearing = localMovementTracker.currentBearing ?: local?.bearingDeg
-        val peerBearing = peerMovementTracker.currentBearing ?: peer?.bearingDeg
-
-        val relativeDir = LocationHelper.calculateRelativeDirection(
-            localBearing = localBearing,
-            peerBearing = peerBearing,
-            localState = localMovementTracker.currentState,
-            peerState = peerMovementTracker.currentState,
-        )
-
-        _liveLocationState.value = LiveLocationState(
-            localLocation = local,
-            peerLocation = peer,
-            distanceMeters = distance,
-            localMovementState = localMovementTracker.currentState,
-            peerMovementState = peerMovementTracker.currentState,
-            localBearingDeg = localBearing,
-            peerBearingDeg = peerBearing,
-            relativeDirection = relativeDir,
-            lastPeerUpdateMs = peerUpdateMs,
-        )
-    }
-
-    private fun handleIncomingLocationUpdate(payload: Payload) {
-        if (payload.latitude == null || payload.longitude == null) return
-        val peerLoc = LocationInfo(
-            latitude = payload.latitude,
-            longitude = payload.longitude,
-            accuracyMeters = payload.accuracy ?: 0f,
-            timestampMs = payload.locationTimestampMs ?: payload.sentTimestampMs,
-        )
-        peerMovementTracker.addFix(peerLoc)
-
-        val localLoc = context?.let { LocationHelper.getLocationInfo(it) }
-        if (localLoc != null) {
-            localMovementTracker.addFix(localLoc)
-        }
-
-        updateLiveLocationState(
-            local = localLoc ?: _liveLocationState.value.localLocation,
-            peer = peerLoc,
-            peerUpdateMs = System.currentTimeMillis(),
-        )
-        Log.d(TAG, "[ITANTRA-LOCATION] Received LOCATION_UPDATE from ${payload.senderId} (${peerLoc.latitude}, ${peerLoc.longitude})")
-    }
-
     private fun monitorConnectionState() {
         scope.launch {
             transport.connectionState.collect { state ->
                 when (state) {
-                    is ConnectionState.Connecting -> {
-                        connectingPeerName = transport.discoveredDevices.value.firstOrNull()?.name ?: "Peer"
-                    }
                     is ConnectionState.Connected -> {
-                        sessionStartMs = System.currentTimeMillis()
-                        connectedPeerName = state.peerName.ifBlank { "Connected Peer" }
-                        connectedPeerAddress = state.peerAddress
-                        connectingPeerName = null
-
                         // Preload before the first PTT release / first incoming speech, avoiding
                         // a model-load pause on the active communication path.
                         sttEngine.setLanguage(_selectedLanguage.value.code)
                         ttsEngine.prewarm(_selectedLanguage.value.code)
                         startHeartbeat()
-                        startLocationSync()
                         Log.d(TAG, "[ITANTRA-SESSION] state=CONNECTED — sending SESSION_INIT")
                         sendControlPayload(
                             PayloadType.CONTROL,
                             text = "SESSION_INIT:${_selectedLanguage.value.code}:${_mode.value.name}"
                         )
                         if (_mode.value == SessionMode.PHONE) {
-                            Log.d(TAG, "[ITANTRA-SESSION] Connected in PHONE mode — auto-starting phone audio")
-                            startPhoneModeAudio()
+                            Log.d(TAG, "[ITANTRA-SESSION] Connected in PHONE mode — auto-starting continuous STT")
+                            scope.launch {
+                                sttEngine.stop()
+                                delay(150L)
+                                sttEngine.start()
+                            }
                         }
                     }
-                    is ConnectionState.Error -> {
-                        val transportType = (transport as? TransportManager)?.activeKind?.value?.label ?: "P2P"
-                        if (connectingPeerName != null) {
-                            val peer = connectingPeerName ?: "Peer"
-                            val savedAlias = historyDao?.getAliasForPeer(peer)
-                            val entry = com.itantra.db.HistoryEntity(
-                                peerName = peer,
-                                peerAddress = "",
-                                alias = savedAlias,
-                                timestampMs = System.currentTimeMillis(),
-                                durationMs = 0L,
-                                transportType = transportType,
-                                languageUsed = _selectedLanguage.value.displayName,
-                                status = "FAILED"
-                            )
-                            scope.launch(Dispatchers.IO) { historyDao?.insertHistory(entry) }
-                            connectingPeerName = null
-                        } else if (sessionStartMs > 0L) {
-                            val duration = System.currentTimeMillis() - sessionStartMs
-                            val peerKey = connectedPeerAddress.ifBlank { connectedPeerName }
-                            val savedAlias = historyDao?.getAliasForPeer(peerKey)
-                            val entry = com.itantra.db.HistoryEntity(
-                                peerName = connectedPeerName,
-                                peerAddress = connectedPeerAddress,
-                                alias = savedAlias,
-                                timestampMs = sessionStartMs,
-                                durationMs = duration,
-                                transportType = transportType,
-                                languageUsed = _selectedLanguage.value.displayName,
-                                status = if (duration > 2000L) "SUCCESS" else "ABORTED"
-                            )
-                            scope.launch(Dispatchers.IO) { historyDao?.insertHistory(entry) }
-                            sessionStartMs = 0L
-                        }
-                        Log.d(TAG, "[ITANTRA-SESSION] state=ERROR — resetting session")
-                        onSessionLost()
-                    }
-                    is ConnectionState.Idle, is ConnectionState.Disconnected -> {
-                        if (sessionStartMs > 0L) {
-                            val duration = System.currentTimeMillis() - sessionStartMs
-                            val transportType = (transport as? TransportManager)?.activeKind?.value?.label ?: "P2P"
-                            val peerKey = connectedPeerAddress.ifBlank { connectedPeerName }
-                            val savedAlias = historyDao?.getAliasForPeer(peerKey)
-                            val entry = com.itantra.db.HistoryEntity(
-                                peerName = connectedPeerName,
-                                peerAddress = connectedPeerAddress,
-                                alias = savedAlias,
-                                timestampMs = sessionStartMs,
-                                durationMs = duration,
-                                transportType = transportType,
-                                languageUsed = _selectedLanguage.value.displayName,
-                                status = if (duration > 2000L) "SUCCESS" else "ABORTED"
-                            )
-                            scope.launch(Dispatchers.IO) { historyDao?.insertHistory(entry) }
-                            sessionStartMs = 0L
-                        }
-                        connectingPeerName = null
+                    is ConnectionState.Idle, is ConnectionState.Error -> {
                         Log.d(TAG, "[ITANTRA-SESSION] state=DISCONNECTED — resetting session")
                         onSessionLost()
                     }
@@ -341,159 +173,71 @@ class SessionController(
 
     private fun onSessionLost() {
         heartbeatJob?.cancel()
-        stopLocationSync()
         _sessionValidated.value = false
         floorTimeoutJob?.cancel()
         sttEngine.stop()
-        stopPhoneModeAudio()
         _floorState.value = FloorState.IDLE
         _mode.value = SessionMode.PTT
         Log.d(TAG, "[ITANTRA-SESSION] session reset complete")
     }
 
-    private fun armFloorTimeout() {
-        floorTimeoutJob?.cancel()
-        floorTimeoutJob = scope.launch {
-            delay(FLOOR_TIMEOUT_MS)
-            if (_floorState.value == FloorState.REMOTE_TRANSMITTING ||
-                _floorState.value == FloorState.CHANNEL_BUSY) {
-                Log.w(TAG, "[ITANTRA-PTT] Floor timeout reached — resetting to IDLE")
-                _floorState.value = FloorState.IDLE
-            }
-        }
+    // ── Public Control API ────────────────────────────────────────────────────
+
+    fun isSessionActive(): Boolean =
+        transport.connectionState.value is ConnectionState.Connected
+
+    fun setMode(newMode: SessionMode) {
+        requestModeChange(newMode)
     }
 
-    // ── Session Controls ──────────────────────────────────────────────────────
-
-    fun switchMode(targetMode: SessionMode) {
-        if (!isSessionActive()) {
-            _mode.value = targetMode
-            return
-        }
-        val timestamp = System.currentTimeMillis()
-        localModeChangeTimestamp = timestamp
-        applyModeTransition(targetMode)
+    fun requestModeChange(newMode: SessionMode) {
+        if (_mode.value == newMode) return
+        val reqTime = System.currentTimeMillis()
+        localModeChangeTimestamp = reqTime
+        Log.d(TAG, "requestModeChange: $newMode at $reqTime")
+        applyModeTransition(newMode)
         scope.launch {
-            sendControlPayload(PayloadType.MODE_CHANGE, text = targetMode.name, timestamp = timestamp)
+            sendControlPayload(PayloadType.MODE_CHANGE, text = newMode.name, timestamp = reqTime)
         }
     }
-
-    fun setMode(targetMode: SessionMode) = switchMode(targetMode)
 
     private fun applyModeTransition(newMode: SessionMode) {
         val old = _mode.value
         if (old == newMode) return
-        Log.d(TAG, "[ITANTRA-SESSION] Mode transitioning: $old -> $newMode")
         _mode.value = newMode
+        Log.d(TAG, "Mode: $old -> $newMode")
         when {
             old == SessionMode.PTT && newMode == SessionMode.PHONE -> {
+                // PTT -> PHONE: release floor, then start continuous VAD-gated STT.
+                // Phone Mode is full-duplex text — no floor control, no raw PCM.
                 if (_floorState.value == FloorState.LOCAL_TRANSMITTING ||
                     _floorState.value == FloorState.WAITING_FOR_CHANNEL) {
                     scope.launch { sendControlPayload(PayloadType.RELEASE_FLOOR) }
                 }
                 floorTimeoutJob?.cancel()
                 _floorState.value = FloorState.IDLE
-                sttEngine.stop()
-                startPhoneModeAudio()
-            }
-            old == SessionMode.PHONE && newMode == SessionMode.PTT -> {
-                stopPhoneModeAudio()
-                sttEngine.stop()
-                floorTimeoutJob?.cancel()
-                _floorState.value = FloorState.IDLE
-            }
-        }
-    }
-
-    private fun startPhoneModeAudio() {
-        Log.d(TAG, "[ITANTRA-PHONE] Starting independent TX & RX for PHONE mode with DutyCycleScheduler")
-        startPhoneRx()
-        dutyCycleScheduler.startMonitoring(scope) {
-            startPhoneTx()
-        }
-    }
-
-    private fun startPhoneRx() {
-        if (phoneAudioPlayer != null) return
-        Log.d(TAG, "[ITANTRA-PHONE] Starting RX stream")
-        val player = com.itantra.audio.AudioPlayer()
-        val success = player.startStream(16000)
-        if (success) {
-            phoneAudioPlayer = player
-        } else {
-            Log.e("CALL", "[CALL][RX][ERROR] Failed to start phone mode audio player stream")
-        }
-    }
-
-    private fun startPhoneTx() {
-        if (phoneAudioRecorder != null) return
-        Log.d(TAG, "[ITANTRA-PHONE] Starting TX stream (voice active)")
-        dutyCycleScheduler.setPipelineActive(true)
-
-        val channel = Channel<FloatArray>(capacity = 128, onBufferOverflow = BufferOverflow.DROP_OLDEST)
-        pcmSendChannel = channel
-
-        phoneTxJob?.cancel()
-        phoneTxJob = scope.launch(Dispatchers.IO) {
-            // Give Android AudioFlinger / HAL a 100ms window to cleanly release microphone if STT just stopped
-            delay(100)
-            if (_mode.value != SessionMode.PHONE || !isSessionActive()) {
-                dutyCycleScheduler.setPipelineActive(false)
-                return@launch
-            }
-
-            var silenceChunkCount = 0
-            val recorder = com.itantra.audio.AudioRecorder()
-            phoneAudioRecorder = recorder
-            recorder.startRecording { floatChunk ->
-                val rms = dutyCycleScheduler.calculateRms(floatChunk)
-                if (rms < DutyCycleScheduler.DEFAULT_RMS_THRESHOLD) {
-                    silenceChunkCount++
-                } else {
-                    silenceChunkCount = 0
-                }
-
-                channel.trySend(floatChunk)
-
-                // ~1.5 seconds of sustained silence (~35 consecutive chunks depending on HAL buffer size)
-                if (silenceChunkCount > 35) {
-                    Log.d(TAG, "[ITANTRA-PHONE] Silence detected in TX stream — returning control to duty cycle scheduler")
-                    scope.launch(Dispatchers.Main) {
-                        stopPhoneTx()
-                        dutyCycleScheduler.setPipelineActive(false)
+                Log.d(TAG, "[ITANTRA-PHONE] Continuous VAD-gated STT started")
+                scope.launch {
+                    try {
+                        sttEngine.stop()
+                        delay(150L)
+                        Log.d(TAG, "[ITANTRA-PHONE] Launching sttEngine.start() for hands-free capture")
+                        sttEngine.start()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "[ITANTRA-PHONE] Failed to start STT engine in Phone Mode", e)
                     }
                 }
             }
-
-            for (chunk in channel) {
-                if (_mode.value == SessionMode.PHONE && isSessionActive()) {
-                    runCatching { transport.sendPcm(chunk) }
-                        .onFailure { e -> Log.e("CALL", "[CALL][TX][ERROR] Failed to send PCM chunk: ${e.message}") }
-                }
+            old == SessionMode.PHONE && newMode == SessionMode.PTT -> {
+                // PHONE -> PTT: stop continuous STT; floor control takes over.
+                sttEngine.stop()
+                floorTimeoutJob?.cancel()
+                _floorState.value = FloorState.IDLE
+                Log.d(TAG, "[ITANTRA-PHONE] Continuous STT stopped; reverting to PTT floor control")
             }
         }
     }
 
-    private fun stopPhoneModeAudio() {
-        Log.d(TAG, "[ITANTRA-PHONE] Stopping TX & RX for PHONE mode")
-        dutyCycleScheduler.stop()
-        stopPhoneTx()
-        stopPhoneRx()
-    }
-
-    private fun stopPhoneTx() {
-        phoneTxJob?.cancel()
-        phoneTxJob = null
-        pcmSendChannel?.close()
-        pcmSendChannel = null
-        phoneAudioRecorder?.stopRecording()
-        phoneAudioRecorder = null
-    }
-
-    private fun stopPhoneRx() {
-        phoneAudioPlayer?.stop()
-        phoneAudioPlayer = null
-    }
 
     fun setLanguage(language: SupportedLanguage) {
         if (isSessionActive()) {
@@ -516,35 +260,41 @@ class SessionController(
         Log.d(TAG, "[ITANTRA-PTT] requestFloorAndArm() floorState=$currentFloor")
 
         if (currentFloor == FloorState.REMOTE_TRANSMITTING) {
-            Log.w(TAG, "PTT denied: remote owns floor")
+            Log.w(TAG, "[ITANTRA-PTT] PTT denied: remote owns floor")
             _floorState.value = FloorState.CHANNEL_BUSY
             return
         }
 
         if (currentFloor == FloorState.LOCAL_TRANSMITTING ||
             currentFloor == FloorState.WAITING_FOR_CHANNEL) {
-            Log.d(TAG, "PTT already active — ignored")
+            Log.d(TAG, "[ITANTRA-PTT] PTT already active — ignored")
             return
         }
 
         val reqTime = System.currentTimeMillis()
         localFloorRequestTimestamp = reqTime
-        _floorState.value = FloorState.WAITING_FOR_CHANNEL
-        Log.d(TAG, "[ITANTRA-PTT] REQUEST_FLOOR sent at $reqTime")
+
+        // ── Optimistic local acquisition ─────────────────────────────────────
+        // In a direct P2P walkie-talkie there may be no peer to send FLOOR_GRANTED.
+        // We immediately acquire the floor locally so STT starts without any
+        // round-trip delay, then notify the peer asynchronously.
+        // If the peer simultaneously requested the floor, the collision is resolved
+        // by the timestamp tie-breaker in handleIncomingFloorRequest.
+        _floorState.value = FloorState.LOCAL_TRANSMITTING
+        sttEngine.start()
+        Log.d(TAG, "[ITANTRA-PTT] Floor acquired locally → sttEngine.start() called (reqTime=$reqTime)")
 
         scope.launch {
+            // Notify peer that we are now transmitting
             sendControlPayload(PayloadType.REQUEST_FLOOR, timestamp = reqTime)
-            
-            delay(5000L)
-            if (_floorState.value == FloorState.WAITING_FOR_CHANNEL) {
-                Log.w(TAG, "[ITANTRA-PTT] Floor request timeout, retrying...")
-                sendControlPayload(PayloadType.REQUEST_FLOOR, timestamp = System.currentTimeMillis())
-                
-                delay(5000L)
-                if (_floorState.value == FloorState.WAITING_FOR_CHANNEL) {
-                    Log.w(TAG, "[ITANTRA-PTT] Floor request retry failed, resetting to IDLE")
-                    _floorState.value = FloorState.IDLE
-                }
+
+            // ── Collision guard ──────────────────────────────────────────────
+            // If the peer sends FLOOR_DENIED within 250ms (they were also transmitting),
+            // handleIncomingFloorDenied() will stop us and set CHANNEL_BUSY.
+            // Nothing extra needed here — the handler covers that path.
+            delay(250L)
+            if (_floorState.value == FloorState.LOCAL_TRANSMITTING) {
+                Log.d(TAG, "[ITANTRA-PTT] Floor held after 250ms — no collision detected, continuing STT")
             }
         }
     }
@@ -557,14 +307,17 @@ class SessionController(
 
         if (currentFloor == FloorState.LOCAL_TRANSMITTING ||
             currentFloor == FloorState.WAITING_FOR_CHANNEL) {
-            _floorState.value = FloorState.IDLE
+            // Stop STT FIRST so the last VAD segment is flushed before we send RELEASE_FLOOR.
+            // The remote peer should not receive a new SPEECH payload after RELEASE_FLOOR.
             sttEngine.stop()
-            Log.d(TAG, "[ITANTRA-PTT] RELEASE_FLOOR")
+            Log.d(TAG, "[ITANTRA-PTT] sttEngine.stop() called on PTT release")
+            _floorState.value = FloorState.IDLE
+            Log.d(TAG, "[ITANTRA-PTT] RELEASE_FLOOR sent — floor returned to IDLE")
             scope.launch {
                 sendControlPayload(PayloadType.RELEASE_FLOOR, timestamp = System.currentTimeMillis())
             }
         } else if (currentFloor == FloorState.CHANNEL_BUSY) {
-            _floorState.value = FloorState.IDLE
+            _floorState.value = FloorState.REMOTE_TRANSMITTING
         }
     }
 
@@ -575,69 +328,20 @@ class SessionController(
         locationTimestampMs: Long? = null,
         locationStatus: String? = null,
     ) {
-        Log.d(TAG, "triggerAlert(lat=$latitude, lon=$longitude, acc=$accuracy, locTime=$locationTimestampMs, status=$locationStatus)")
-        val lang = _selectedLanguage.value
+        Log.d(TAG, "triggerAlert(lat=$latitude, lon=$longitude, acc=$accuracy, ts=$locationTimestampMs, status=$locationStatus)")
         scope.launch {
-            val sttCompleteMs = System.currentTimeMillis()
-            val sentence = RecognizedSentence(
-                text         = lang.emergencyPhrase,
-                languageCode = lang.code,
-                isAlert      = true,
-                timestampMs  = sttCompleteMs,
-                sequenceId   = -1,
-            )
-            val payload = Payload(
-                type                = PayloadType.ALERT,
-                text                = sentence.text,
-                languageCode        = sentence.languageCode,
-                sequenceId          = sentence.sequenceId,
-                sentTimestampMs     = sttCompleteMs,
-                senderId            = localPeerId,
-                latitude            = latitude,
-                longitude           = longitude,
-                accuracy            = accuracy,
-                locationTimestampMs = locationTimestampMs,
-                locationStatus      = locationStatus,
-            )
-            runCatching { transport.send(payload) }
-                .onFailure { e -> Log.e(TAG, "transport.send() alert failed", e) }
-
-            if (latitude != null && longitude != null) {
-                val localLoc = LocationInfo(
-                    latitude = latitude,
-                    longitude = longitude,
-                    accuracyMeters = accuracy ?: 0f,
-                    timestampMs = locationTimestampMs ?: sttCompleteMs,
-                )
-                localMovementTracker.addFix(localLoc)
-                updateLiveLocationState(local = localLoc)
-            }
-
-            appendTranscript(
-                TranscriptEntry(
-                    direction           = Direction.SENT,
-                    text                = sentence.text,
-                    languageCode        = sentence.languageCode,
-                    isAlert             = sentence.isAlert,
-                    sequenceId          = sentence.sequenceId,
-                    sessionMode         = _mode.value,
-                    latitude            = latitude,
-                    longitude           = longitude,
-                    accuracy            = accuracy,
-                    locationTimestampMs = locationTimestampMs,
-                    locationStatus      = locationStatus,
-                    sttLatencyMs        = 0L,
-                    queueLatencyMs      = 0L,
-                    networkLatencyMs    = 0L,
-                    ttsLatencyMs        = 0L,
-                    totalE2eLatencyMs   = 0L,
-                    rtf                 = 0f,
-                    micPauseDetectedMs  = sentence.timestampMs,
-                    sttCompleteMs       = sttCompleteMs,
-                    sentMs              = System.currentTimeMillis(),
-                    receivedMs          = 0L,
-                    ttsStartedMs        = 0L,
-                )
+            sendSentence(
+                sentence = RecognizedSentence(
+                    text         = "[ALERT] Manual alert triggered by operator",
+                    languageCode = _selectedLanguage.value.code,
+                    isAlert      = true,
+                    timestampMs  = locationTimestampMs ?: System.currentTimeMillis(),
+                    sequenceId   = -1,
+                ),
+                latitude = latitude,
+                longitude = longitude,
+                accuracy = accuracy,
+                locationStatus = locationStatus,
             )
         }
     }
@@ -647,14 +351,12 @@ class SessionController(
     fun disconnect() {
         Log.d(TAG, "disconnect() from SessionController")
         floorTimeoutJob?.cancel()
-        stopLocationSync()
 
         val wasTransmitting = _floorState.value == FloorState.LOCAL_TRANSMITTING ||
                               _floorState.value == FloorState.WAITING_FOR_CHANNEL
 
         sttEngine.stop()
-        stopPhoneModeAudio()
-        
+
         _floorState.value = FloorState.IDLE
         _mode.value = SessionMode.PTT
         _transcript.value = emptyList()
@@ -670,67 +372,71 @@ class SessionController(
 
     fun shutdown() {
         Log.d(TAG, "shutdown() from SessionController")
-        heartbeatJob?.cancel()
-        stopLocationSync()
-        floorTimeoutJob?.cancel()
-        sttEngine.shutdown()
+        disconnect()
         ttsEngine.shutdown()
-        stopPhoneModeAudio()
         scope.cancel()
-    }
-
-    fun isSessionActive(): Boolean {
-        return transport.connectionState.value is ConnectionState.Connected
     }
 
     // ── Outgoing pipeline: STT → Transport ───────────────────────────────────
 
-    private fun collectStt() {
+    private fun collectOutgoing() {
         scope.launch {
             sttEngine.recognizedSentences
                 .catch { e -> Log.e(TAG, "STT flow error", e) }
                 .collect { sentence ->
-                    if (_mode.value == SessionMode.PHONE) {
-                        Log.w(TAG, "STT emission in PHONE mode — discarded (use raw PCM)")
-                    } else {
-                        sendSentence(sentence)
-                    }
+                    // Both PTT and PHONE modes transmit recognized text payloads.
+                    // Phone Mode uses continuous VAD-gated STT (no floor control).
+                    sendSentence(sentence)
                 }
         }
     }
 
-    private suspend fun sendSentence(sentence: RecognizedSentence) {
+    private suspend fun sendSentence(
+        sentence: RecognizedSentence,
+        latitude: Double? = null,
+        longitude: Double? = null,
+        accuracy: Float? = null,
+        locationStatus: String? = null,
+    ) {
         val sttCompleteMs = System.currentTimeMillis()
-        val sttLatency = if (sentence.sttLatencyMs > 0L) sentence.sttLatencyMs else (sttCompleteMs - sentence.timestampMs).coerceAtLeast(0L)
-        val rtfVal = sentence.rtf
-        val queueMs = (System.currentTimeMillis() - sttCompleteMs).coerceAtLeast(0L)
+        val sttLatency = if (sentence.inferenceDurationMs > 0L) {
+            sentence.inferenceDurationMs
+        } else if (sentence.timestampMs > 0L && sttCompleteMs >= sentence.timestampMs) {
+            sttCompleteMs - sentence.timestampMs
+        } else {
+            0L
+        }
+        val rtfVal = if (sentence.rtf > 0f) sentence.rtf else (if (sttLatency > 0) (sttLatency / 1000.0f) else 0.0f)
+
         val payload = Payload(
             type            = if (sentence.isAlert) PayloadType.ALERT else PayloadType.SPEECH,
             text            = sentence.text,
             languageCode    = sentence.languageCode,
             sequenceId      = sentence.sequenceId,
-            sentTimestampMs = System.currentTimeMillis(),
+            sentTimestampMs = sttCompleteMs,
             senderId        = localPeerId,
-            latitude        = null,
-            longitude       = null,
+            latitude        = latitude,
+            longitude       = longitude,
+            accuracy        = accuracy,
+            locationStatus  = locationStatus,
             sttLatencyMs    = sttLatency,
-            senderQueueMs   = queueMs,
             rtf             = rtfVal,
         )
-        val encodedBytes = runCatching { BinaryEncoder.encode(payload).size }.getOrDefault(0)
+        runCatching { transport.send(payload) }
+            .onFailure { e -> Log.e(TAG, "transport.send() failed", e) }
 
-        _telemetry.value = TelemetryState(
+        val encodedBytes = runCatching { com.itantra.transport.binary.BinaryEncoder.encode(payload).size }.getOrDefault(128)
+        val transportLabel = (transport as? TransportManager)?.activeKind?.value?.label ?: "Bluetooth"
+
+        _telemetry.value = com.itantra.telemetry.TelemetryState(
             sttLatencyMs   = sttLatency,
-            ttsLatencyMs   = 0L,
+            ttsLatencyMs   = _telemetry.value.ttsLatencyMs,
             rtf            = rtfVal,
             e2eLatencyMs   = sttLatency,
             payloadBytes   = encodedBytes,
-            activeLanguage = sentence.languageCode,
-            transport      = getTransportTypeLabel(),
+            activeLanguage = sentence.languageCode.ifBlank { _selectedLanguage.value.code },
+            transport      = transportLabel,
         )
-
-        runCatching { transport.send(payload) }
-            .onFailure { e -> Log.e(TAG, "transport.send() failed", e) }
 
         appendTranscript(
             TranscriptEntry(
@@ -740,19 +446,17 @@ class SessionController(
                 isAlert            = sentence.isAlert,
                 sequenceId         = sentence.sequenceId,
                 sessionMode        = _mode.value,
-                latitude           = null,
-                longitude          = null,
-                sttLatencyMs       = sttLatency,
-                queueLatencyMs     = queueMs,
-                networkLatencyMs   = 0L,
-                ttsLatencyMs       = 0L,
-                totalE2eLatencyMs  = sttLatency,
-                rtf                = rtfVal,
                 micPauseDetectedMs = sentence.timestampMs,
                 sttCompleteMs      = sttCompleteMs,
-                sentMs             = payload.sentTimestampMs,
+                sentMs             = System.currentTimeMillis(),
                 receivedMs         = 0L,
                 ttsStartedMs       = 0L,
+                sttDurationMs      = sttLatency,
+                sttRtf             = rtfVal,
+                latitude           = latitude,
+                longitude          = longitude,
+                accuracy           = accuracy,
+                locationStatus     = locationStatus,
             )
         )
     }
@@ -789,24 +493,14 @@ class SessionController(
                         PayloadType.FLOOR_GRANTED -> handleIncomingFloorGranted(payload)
                         PayloadType.FLOOR_DENIED  -> handleIncomingFloorDenied(payload)
                         PayloadType.RELEASE_FLOOR -> handleIncomingReleaseFloor(payload)
-                        PayloadType.LOCATION_UPDATE -> handleIncomingLocationUpdate(payload)
                         PayloadType.SPEECH, PayloadType.ALERT -> handleIncomingSpeech(payload)
+                        PayloadType.LOCATION_UPDATE -> Log.d(TAG, "Incoming LOCATION_UPDATE from ${payload.senderId} (${payload.latitude}, ${payload.longitude})")
                     }
                 }
         }
         
-        scope.launch(Dispatchers.IO) {
-            transport.onPcmReceived
-                .catch { e -> Log.e(TAG, "Transport receive PCM flow error", e) }
-                .collect { floatChunk ->
-                    if (_mode.value == SessionMode.PHONE) {
-                        if (phoneAudioPlayer == null) {
-                            startPhoneRx()
-                        }
-                        phoneAudioPlayer?.writeStream(floatChunk)
-                    }
-                }
-        }
+        // Raw PCM reception removed — Phone Mode now receives SPEECH text payloads
+        // decoded by the remote peer's VAD+STT pipeline and plays them via TTS.
     }
 
     private fun handleControl(payload: Payload) {
@@ -838,7 +532,12 @@ class SessionController(
             if (parsedMode != null && parsedMode != _mode.value) {
                 applyModeTransition(parsedMode)
             } else if (_mode.value == SessionMode.PHONE) {
-                if (phoneAudioRecorder == null) startPhoneModeAudio()
+                // Ensure continuous STT is running if we re-validated an existing PHONE session
+                scope.launch {
+                    sttEngine.stop()
+                    delay(150L)
+                    sttEngine.start()
+                }
             }
 
         } else if (text.startsWith("SESSION_REJECT:")) {
@@ -879,46 +578,60 @@ class SessionController(
 
         when (currentFloor) {
             FloorState.IDLE -> {
-                // Grant floor to remote peer and update UI state immediately
+                // Remote wants the floor and we're idle — grant it immediately.
                 _floorState.value = FloorState.REMOTE_TRANSMITTING
                 armFloorTimeout()
-                scope.launch { sendControlPayload(PayloadType.FLOOR_GRANTED) }
+                Log.d(TAG, "[ITANTRA-PTT] Remote granted floor to ${payload.senderId} — we are now REMOTE_TRANSMITTING")
+                scope.launch { sendControlPayload(PayloadType.FLOOR_GRANTED, timestamp = System.currentTimeMillis()) }
             }
             FloorState.LOCAL_TRANSMITTING -> {
-                scope.launch { sendControlPayload(PayloadType.FLOOR_DENIED) }
+                // We own the floor — deny the remote request.
+                Log.d(TAG, "[ITANTRA-PTT] FLOOR_DENIED to ${payload.senderId} — we are LOCAL_TRANSMITTING")
+                scope.launch { sendControlPayload(PayloadType.FLOOR_DENIED, timestamp = System.currentTimeMillis()) }
             }
             FloorState.WAITING_FOR_CHANNEL -> {
+                // Both sides requested simultaneously — timestamp tie-break.
                 val localTime  = localFloorRequestTimestamp
                 val remoteTime = payload.sentTimestampMs
                 val localWins = when {
                     localTime < remoteTime -> true
                     localTime > remoteTime -> false
-                    else -> localPeerId < payload.senderId
+                    else                  -> localPeerId < payload.senderId
                 }
                 if (localWins) {
                     _floorState.value = FloorState.LOCAL_TRANSMITTING
                     sttEngine.start()
-                    scope.launch { sendControlPayload(PayloadType.FLOOR_DENIED) }
+                    Log.d(TAG, "[ITANTRA-PTT] Collision: local wins — LOCAL_TRANSMITTING, sttEngine.start() called")
+                    scope.launch { sendControlPayload(PayloadType.FLOOR_DENIED, timestamp = System.currentTimeMillis()) }
                 } else {
-                    _floorState.value = FloorState.REMOTE_TRANSMITTING
                     sttEngine.stop()
+                    _floorState.value = FloorState.REMOTE_TRANSMITTING
                     armFloorTimeout()
-                    scope.launch { sendControlPayload(PayloadType.FLOOR_GRANTED) }
+                    Log.d(TAG, "[ITANTRA-PTT] Collision: remote wins — REMOTE_TRANSMITTING, sttEngine.stop() called")
+                    scope.launch { sendControlPayload(PayloadType.FLOOR_GRANTED, timestamp = System.currentTimeMillis()) }
                 }
             }
             FloorState.REMOTE_TRANSMITTING, FloorState.CHANNEL_BUSY -> {
+                // Already aware remote is transmitting — re-grant and refresh timeout.
                 armFloorTimeout()
-                scope.launch { sendControlPayload(PayloadType.FLOOR_GRANTED) }
+                scope.launch { sendControlPayload(PayloadType.FLOOR_GRANTED, timestamp = System.currentTimeMillis()) }
             }
         }
     }
 
     private fun handleIncomingFloorGranted(payload: Payload) {
         if (_mode.value == SessionMode.PHONE) return
-        Log.d(TAG, "[ITANTRA-PTT] FLOOR_GRANTED from ${payload.senderId} roundTripMs=${System.currentTimeMillis() - localFloorRequestTimestamp}")
+        val rtt = System.currentTimeMillis() - localFloorRequestTimestamp
+        Log.d(TAG, "[ITANTRA-PTT] FLOOR_GRANTED from ${payload.senderId} roundTripMs=$rtt floorState=${_floorState.value}")
+        // With optimistic acquisition, we are already LOCAL_TRANSMITTING.
+        // FLOOR_GRANTED from the peer simply confirms no collision — nothing to do.
         if (_floorState.value == FloorState.WAITING_FOR_CHANNEL) {
+            // Fallback: in case we somehow ended up in WAITING_FOR_CHANNEL, promote now.
             _floorState.value = FloorState.LOCAL_TRANSMITTING
             sttEngine.start()
+            Log.d(TAG, "[ITANTRA-PTT] FLOOR_GRANTED promoted WAITING_FOR_CHANNEL → LOCAL_TRANSMITTING, sttEngine.start()")
+        } else {
+            Log.d(TAG, "[ITANTRA-PTT] FLOOR_GRANTED acknowledged — already LOCAL_TRANSMITTING, STT running")
         }
     }
 
@@ -934,11 +647,12 @@ class SessionController(
 
     private fun handleIncomingReleaseFloor(payload: Payload) {
         if (_mode.value == SessionMode.PHONE) return
-        Log.d(TAG, "[ITANTRA-PTT] RELEASE_FLOOR from ${payload.senderId}")
+        Log.d(TAG, "[ITANTRA-PTT] RELEASE_FLOOR from ${payload.senderId} — resetting to IDLE")
         floorTimeoutJob?.cancel()
         if (_floorState.value == FloorState.REMOTE_TRANSMITTING ||
             _floorState.value == FloorState.CHANNEL_BUSY) {
             _floorState.value = FloorState.IDLE
+            Log.d(TAG, "[ITANTRA-PTT] Floor returned to IDLE after remote release")
         }
     }
 
@@ -950,119 +664,106 @@ class SessionController(
             Log.w(TAG, "Incoming speech lang mismatch: payload=${payload.languageCode} local=$localLang — TTS will attempt anyway")
         }
 
-        // CRITICAL SPEC REQUIREMENT:
-        // PTT RELEASE_FLOOR cannot be overridden by delayed/old SPEECH packets.
-        // We DO NOT set _floorState to REMOTE_TRANSMITTING here. Floor is governed strictly by
-        // REQUEST_FLOOR and RELEASE_FLOOR messages.
+        if (_mode.value == SessionMode.PTT && _floorState.value == FloorState.IDLE) {
+            _floorState.value = FloorState.REMOTE_TRANSMITTING
+        }
+        armFloorTimeout()
 
         val receivedMs = payload.receivedTimestampMs.takeIf { it > 0L } ?: System.currentTimeMillis()
         val sentence = RecognizedSentence(
-            text         = payload.text,
-            languageCode = payload.languageCode,
-            isAlert      = payload.type == PayloadType.ALERT,
-            timestampMs  = payload.sentTimestampMs,
-            sequenceId   = payload.sequenceId,
-            receivedTimestampMs = receivedMs,
-            sttLatencyMs = payload.sttLatencyMs,
-            rtf          = payload.rtf,
-        )
-
-        val sttLatency = payload.sttLatencyMs
-        val senderQueue = payload.senderQueueMs
-        val rtfVal = payload.rtf
-        // Network transit time estimation (clamped between 5ms and 300ms if clock skew is detected)
-        val rawNetTime = receivedMs - payload.sentTimestampMs
-        val networkLatency = if (rawNetTime in 0..1000) rawNetTime else 15L // fallback to typical P2P wireless delay if clocks are skewed
-        val encodedBytes = runCatching { BinaryEncoder.encode(payload).size }.getOrDefault(0)
-
-        val initialE2e = sttLatency + senderQueue + networkLatency
-        val entry = TranscriptEntry(
-            direction           = Direction.RECEIVED,
             text                = payload.text,
             languageCode        = payload.languageCode,
-            isAlert             = sentence.isAlert,
+            isAlert             = payload.type == PayloadType.ALERT,
+            timestampMs         = payload.sentTimestampMs,
             sequenceId          = payload.sequenceId,
-            sessionMode         = _mode.value,
-            latitude            = payload.latitude,
-            longitude           = payload.longitude,
-            accuracy            = payload.accuracy,
-            locationTimestampMs = payload.locationTimestampMs,
-            locationStatus      = payload.locationStatus,
-            sttLatencyMs        = sttLatency,
-            queueLatencyMs      = senderQueue,
-            networkLatencyMs    = networkLatency,
-            ttsLatencyMs        = 0L,
-            totalE2eLatencyMs   = initialE2e,
-            rtf                 = rtfVal,
-            micPauseDetectedMs  = payload.sentTimestampMs,
-            sttCompleteMs       = payload.sentTimestampMs,
-            sentMs              = payload.sentTimestampMs,
-            receivedMs          = receivedMs,
-            ttsStartedMs        = 0L,
+            inferenceDurationMs = payload.sttLatencyMs,
+            rtf                 = payload.rtf,
         )
 
-        _telemetry.value = TelemetryState(
-            sttLatencyMs   = sttLatency,
-            ttsLatencyMs   = 0L,
-            rtf            = rtfVal,
-            e2eLatencyMs   = initialE2e,
+        val encodedBytes = runCatching { com.itantra.transport.binary.BinaryEncoder.encode(payload).size }.getOrDefault(128)
+        val transportLabel = (transport as? TransportManager)?.activeKind?.value?.label ?: "Bluetooth"
+
+        val initialNetMs = if (payload.sentTimestampMs > 0L) (receivedMs - payload.sentTimestampMs).coerceAtLeast(0L) else 0L
+        _telemetry.value = com.itantra.telemetry.TelemetryState(
+            sttLatencyMs   = payload.sttLatencyMs,
+            ttsLatencyMs   = _telemetry.value.ttsLatencyMs,
+            rtf            = payload.rtf,
+            e2eLatencyMs   = payload.sttLatencyMs + initialNetMs + _telemetry.value.ttsLatencyMs,
             payloadBytes   = encodedBytes,
-            activeLanguage = payload.languageCode.ifBlank { _selectedLanguage.value.code },
-            transport      = getTransportTypeLabel(),
+            activeLanguage = payload.languageCode.ifBlank { localLang },
+            transport      = transportLabel,
         )
 
-        appendTranscript(entry)
+        ttsEngine.speak(sentence)
 
-        // Asynchronously speak and measure true TTS synthesis latency via callback
-        ttsEngine.speak(sentence) { actualTtsMs ->
-            val totalE2e = sttLatency + senderQueue + networkLatency + actualTtsMs
-            Log.d(TAG, "[TELEMETRY] Speech transaction complete: STT=${sttLatency}ms, Queue=${senderQueue}ms, Net=${networkLatency}ms, TTS=${actualTtsMs}ms, Total=${totalE2e}ms, RTF=$rtfVal")
-            _telemetry.value = TelemetryState(
-                sttLatencyMs   = sttLatency,
-                ttsLatencyMs   = actualTtsMs,
-                rtf            = rtfVal,
-                e2eLatencyMs   = totalE2e,
-                payloadBytes   = encodedBytes,
-                activeLanguage = payload.languageCode.ifBlank { _selectedLanguage.value.code },
-                transport      = getTransportTypeLabel(),
-            )
-            // Update the transcript entry with actual TTS and total E2E latency
-            _transcript.update { list ->
-                list.map { item ->
-                    if (item.sequenceId == payload.sequenceId && item.direction == Direction.RECEIVED) {
-                        item.copy(
-                            ttsLatencyMs = actualTtsMs,
-                            totalE2eLatencyMs = totalE2e,
-                            ttsStartedMs = System.currentTimeMillis(),
-                        )
-                    } else {
-                        item
-                    }
+        scope.launch {
+            try {
+                ttsEngine.speakAndAwait(sentence)
+            } catch (e: Exception) {
+                Log.e(TAG, "Error playing incoming speech", e)
+            } finally {
+                floorTimeoutJob?.cancel()
+                floorTimeoutJob = null
+
+                if (_mode.value == SessionMode.PTT && _floorState.value == FloorState.REMOTE_TRANSMITTING) {
+                    _floorState.value = FloorState.IDLE
+                    Log.d(TAG, "[ITANTRA-SESSION] TTS audio playback completed — floor immediately returned to IDLE")
                 }
             }
         }
 
-        if (payload.type == PayloadType.ALERT && payload.latitude != null && payload.longitude != null) {
-            val peerLoc = LocationInfo(
-                latitude = payload.latitude,
-                longitude = payload.longitude,
-                accuracyMeters = payload.accuracy ?: 0f,
-                timestampMs = payload.locationTimestampMs ?: payload.sentTimestampMs,
+        appendTranscript(
+            TranscriptEntry(
+                direction          = Direction.RECEIVED,
+                text               = payload.text,
+                languageCode       = payload.languageCode,
+                isAlert            = sentence.isAlert,
+                sequenceId         = payload.sequenceId,
+                sessionMode        = _mode.value,
+                micPauseDetectedMs = payload.sentTimestampMs,
+                sttCompleteMs      = payload.sentTimestampMs,
+                sentMs             = payload.sentTimestampMs,
+                receivedMs         = receivedMs,
+                ttsStartedMs       = 0L,
+                sttDurationMs      = payload.sttLatencyMs,
+                sttRtf             = payload.rtf,
+                latitude           = payload.latitude,
+                longitude          = payload.longitude,
+                accuracy           = payload.accuracy,
+                locationStatus     = payload.locationStatus,
             )
-            peerMovementTracker.addFix(peerLoc)
-            val localLoc = context?.let { LocationHelper.getLocationInfo(it) }
-            if (localLoc != null) {
-                localMovementTracker.addFix(localLoc)
+        )
+    }
+
+    private fun armFloorTimeout() {
+        floorTimeoutJob?.cancel()
+        floorTimeoutJob = scope.launch {
+            delay(FLOOR_TIMEOUT_MS)
+            if (_floorState.value == FloorState.REMOTE_TRANSMITTING) {
+                Log.w(TAG, "[ITANTRA-SESSION] Floor timeout — resetting REMOTE_TRANSMITTING → IDLE")
+                _floorState.value = FloorState.IDLE
             }
-            updateLiveLocationState(
-                local = localLoc ?: _liveLocationState.value.localLocation,
-                peer = peerLoc,
-                peerUpdateMs = System.currentTimeMillis(),
-            )
         }
     }
 
     private fun appendTranscript(entry: TranscriptEntry) {
         _transcript.update { (it + entry).takeLast(MAX_TRANSCRIPT_ENTRIES) }
+        historyDao?.let { dao ->
+            scope.launch(Dispatchers.IO) {
+                runCatching {
+                    dao.insertHistory(
+                        com.itantra.db.HistoryEntity(
+                            peerName = entry.direction.name,
+                            peerAddress = "",
+                            timestampMs = System.currentTimeMillis(),
+                            durationMs = 0L,
+                            transportType = _mode.value.name,
+                            languageUsed = entry.languageCode,
+                            status = "SUCCESS"
+                        )
+                    )
+                }
+            }
+        }
     }
 }

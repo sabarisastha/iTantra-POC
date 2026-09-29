@@ -20,6 +20,11 @@ import com.itantra.stt.RecognizedSentence
  */
 interface TextToSpeechEngine {
 
+    /** Callback invoked when audio output actually begins playing from speaker. */
+    var onUtteranceStartedListener: ((sequenceId: Int, startedMs: Long) -> Unit)?
+        get() = null
+        set(_) {}
+
     /**
      * Synthesize and play [sentence].
      * Alert sentences MUST be non-interruptible and play at maximum volume.
@@ -31,6 +36,13 @@ interface TextToSpeechEngine {
      * Synthesize and play [sentence], invoking [onAudioReady] when synthesis is complete and audio playback begins.
      */
     fun speak(sentence: RecognizedSentence, onAudioReady: ((ttsLatencyMs: Long) -> Unit)? = null) {
+        speak(sentence)
+    }
+
+    /**
+     * Synthesize and play [sentence], suspending until audio playback finishes completely.
+     */
+    suspend fun speakAndAwait(sentence: RecognizedSentence) {
         speak(sentence)
     }
 

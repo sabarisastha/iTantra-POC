@@ -33,7 +33,12 @@ class MainActivity : ComponentActivity() {
         val recordAudioGranted = results[Manifest.permission.RECORD_AUDIO] == true
         val locationGranted = results[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                               results[Manifest.permission.ACCESS_COARSE_LOCATION] == true
-        if (recordAudioGranted && locationGranted) {
+        val bluetoothGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            results[Manifest.permission.BLUETOOTH_CONNECT] == true &&
+            results[Manifest.permission.BLUETOOTH_SCAN] == true
+        } else true
+
+        if (recordAudioGranted && (locationGranted || bluetoothGranted)) {
             permissionsGranted.value = true
         }
     }
@@ -53,7 +58,7 @@ class MainActivity : ComponentActivity() {
                         sessionController = app.sessionController,
                         modelManager      = app.modelManager,
                         permissionsGranted = permissionsGranted,
-                        historyDao = app.historyDao
+                        historyDao        = app.historyDao,
                     )
                 }
             }
@@ -75,8 +80,6 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.CHANGE_WIFI_STATE,
             Manifest.permission.CHANGE_NETWORK_STATE,
             Manifest.permission.MODIFY_AUDIO_SETTINGS,
-            // ACCESS_FINE_LOCATION is required for Wi-Fi Direct peer discovery on ALL Android versions.
-            // On Android 13+, NEARBY_WIFI_DEVICES is also required alongside it.
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION,
         )
@@ -86,6 +89,7 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             perms += Manifest.permission.BLUETOOTH_SCAN
             perms += Manifest.permission.BLUETOOTH_CONNECT
+            perms += Manifest.permission.BLUETOOTH_ADVERTISE
         } else {
             @Suppress("DEPRECATION")
             perms += Manifest.permission.BLUETOOTH
@@ -105,4 +109,3 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
-

@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import java.util.concurrent.atomic.AtomicInteger
+import kotlin.math.abs
 
 private const val TAG = "ITAN-STT"
 
@@ -109,14 +110,22 @@ class IndicConformerSttEngine(
         }
     }
 
-    private fun handleStart() {
+    private suspend fun handleStart() {
         if (isRecording) {
             Log.w(TAG, "start() called while already recording — ignored")
             return
         }
 
-        Log.d(TAG, "IndicConformerSttEngine.start() invoked, starting AudioRecorder")
         isRecording = true
+
+        if (audioRecorder != null) {
+            Log.d(TAG, "Releasing existing AudioRecorder and waiting 100ms for HAL unbind")
+            audioRecorder?.stopRecording()
+            audioRecorder = null
+            delay(100L)
+        }
+
+        Log.d(TAG, "IndicConformerSttEngine.start() invoked, starting AudioRecorder")
 
         // Create a fresh VAD pipeline for this recording session
         val pipeline = AdaptiveNoiseFloorVadPipeline(context)
@@ -151,9 +160,11 @@ class IndicConformerSttEngine(
                     scope.launch {
                         if (!isRecording) return@launch
                         val segment = pipeline.processFrame(frame)
-                        if (segment != null) {
-                            Log.d(TAG, "[ITAN-STT] VAD speech segment complete: ${segment.size} samples (${segment.size / 16000f}s) — dispatching to STT")
-                            processSpeechSegment(segment)
+                        if (segment != null && segment.isNotEmpty()) {
+                            Log.d(TAG, "[ITAN-STT] Hands-free segment ready: ${segment.size} samples (${segment.size / 16000.0}s) — dispatching")
+                            scope.launch(Dispatchers.Default) {
+                                processSpeechSegment(segment)
+                            }
                         }
                     }
                 }
@@ -196,6 +207,23 @@ class IndicConformerSttEngine(
     private suspend fun processSpeechSegment(audioData: FloatArray) {
         if (audioData.isEmpty() || isShutdown) return
 
+        // Compute peak amplitude
+        var maxAbs = 0f
+        for (s in audioData) {
+            val a = abs(s)
+            if (a > maxAbs) maxAbs = a
+        }
+        Log.d(TAG, "Speech segment audio peak amplitude: $maxAbs (samples: ${audioData.size})")
+
+        // Peak normalization if the recording is faint (maxAbs < 0.25f and not dead silent)
+        val samplesToProcess = if (maxAbs in 0.001f..0.25f) {
+            val gain = (0.7f / maxAbs).coerceAtMost(10.0f)
+            Log.d(TAG, "Applying digital normalization gain: x$gain")
+            FloatArray(audioData.size) { (audioData[it] * gain).coerceIn(-1.0f, 1.0f) }
+        } else {
+            audioData
+        }
+
         val lang = modelManager.currentSttLang ?: "hi"
         var recognizer = modelManager.getSttRecognizer()
 
@@ -206,27 +234,23 @@ class IndicConformerSttEngine(
 
         val langCode = modelManager.currentSttLang ?: lang
         var text = ""
-        var sttLatency = 0L
-        var rtfVal = 0f
+        var latencyMs = 0L
 
         if (recognizer != null) {
             val acquiredRecognizer = modelManager.acquireSttForInference()
             if (acquiredRecognizer != null) {
                 try {
                     val startMs = System.currentTimeMillis()
-                    Log.d(TAG, "Running Sherpa-ONNX STT on ${audioData.size} samples (${audioData.size / 16000f}s)")
+                    Log.d(TAG, "Running Sherpa-ONNX STT on ${samplesToProcess.size} samples (${samplesToProcess.size / 16000f}s)")
                     val stream = acquiredRecognizer.createStream()
-                    stream.acceptWaveform(audioData, sampleRate = AudioRecorder.SAMPLE_RATE)
+                    stream.acceptWaveform(samplesToProcess, sampleRate = AudioRecorder.SAMPLE_RATE)
                     acquiredRecognizer.decode(stream)
                     val result = acquiredRecognizer.getResult(stream)
                     stream.release()
 
                     text = result.text.trim()
-                    val latencyMs = System.currentTimeMillis() - startMs
-                    sttLatency = latencyMs
-                    val audioDurationMs = (audioData.size.toFloat() / AudioRecorder.SAMPLE_RATE) * 1000f
-                    rtfVal = if (audioDurationMs > 0f) latencyMs.toFloat() / audioDurationMs else 0f
-                    Log.d(TAG, "STT inference done in ${latencyMs}ms (RTF: $rtfVal): '$text'")
+                    latencyMs = System.currentTimeMillis() - startMs
+                    Log.d(TAG, "STT inference done in ${latencyMs}ms: '$text'")
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -243,16 +267,19 @@ class IndicConformerSttEngine(
         }
 
         val seqId = sequenceIdCounter.incrementAndGet()
-        Log.d(TAG, "[ITAN-STT] Recognized: '$text' lang=$langCode seq=$seqId rtf=$rtfVal")
+        val audioDurationSec = samplesToProcess.size / 16000.0f
+        val sttRtf = if (audioDurationSec > 0f) (latencyMs / 1000.0f) / audioDurationSec else 0f
+
+        Log.d(TAG, "[ITAN-STT] Recognized: '$text' lang=$langCode seq=$seqId (duration=${audioDurationSec}s, latency=${latencyMs}ms, rtf=${"%.2f".format(sttRtf)})")
         _recognizedSentences.emit(
             RecognizedSentence(
-                text         = text,
-                languageCode = langCode,
-                isAlert      = false,
-                timestampMs  = System.currentTimeMillis() - sttLatency,
-                sequenceId   = seqId,
-                sttLatencyMs = sttLatency,
-                rtf          = rtfVal,
+                text                = text,
+                languageCode        = langCode,
+                isAlert             = false,
+                timestampMs         = System.currentTimeMillis(),
+                sequenceId          = seqId,
+                inferenceDurationMs = latencyMs,
+                rtf                 = sttRtf,
             )
         )
     }

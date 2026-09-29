@@ -13,13 +13,13 @@ android {
 
     defaultConfig {
         applicationId = "com.itantra"
-        minSdk        = 23
+        minSdk        = 24
         targetSdk     = 35
         versionCode   = 1
         versionName   = "1.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
-            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64"))
+            abiFilters.add("arm64-v8a")
         }
     }
 
@@ -49,39 +49,17 @@ android {
         compose = true
     }
 
-    packagingOptions {
-        jniLibs.useLegacyPackaging = true
-        jniLibs.pickFirsts.add("**/libonnxruntime.so")
-        jniLibs.pickFirsts.add("**/libsherpa-onnx-core.so")
-    }
-
-    testOptions {
-        unitTests {
-            isReturnDefaultValues = true
+    packaging {
+        jniLibs {
+            pickFirsts.add("**/libonnxruntime.so")
+            pickFirsts.add("**/libsherpa-onnx-core.so")
+            keepDebugSymbols.add("**/libonnxruntime4j_jni.so")
         }
     }
 }
 
-afterEvaluate {
-    tasks.register<JavaExec>("runBinaryTest") {
-        dependsOn("compileDebugUnitTestKotlin")
-        mainClass.set("org.junit.runner.JUnitCore")
-        val kotlinTestClasses = layout.buildDirectory.dir("tmp/kotlin-classes/debugUnitTest")
-        val appClasses = layout.buildDirectory.dir("intermediates/javac/debug/compileDebugJavaWithJavac/classes")
-        val kotlinAppClasses = layout.buildDirectory.dir("tmp/kotlin-classes/debug")
-        classpath = files(
-            kotlinTestClasses,
-            appClasses,
-            kotlinAppClasses,
-            configurations.getByName("debugUnitTestRuntimeClasspath")
-        )
-        args("com.itantra.transport.binary.BinaryProtocolTest")
-    }
-}
-
 dependencies {
-    implementation(files("libs/sherpa-onnx-1.13.8.aar"))
-    implementation(libs.onnxruntime.android)
+    implementation(files("libs/sherpa-onnx-1.13.7.aar"))
     // ── Jetpack Compose BOM ──────────────────────────────────────────────────
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
@@ -107,11 +85,15 @@ dependencies {
 
     // ── kotlinx.serialization — Payload marshalling over TCP socket ──────────
     implementation(libs.kotlinx.serialization.json)
+
+    // ── Room Database ─────────────────────────────────────────────────────────
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
 
-    testImplementation("junit:junit:4.13.2")
+    // ── Testing dependencies ──────────────────────────────────────────────────
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }
-
-

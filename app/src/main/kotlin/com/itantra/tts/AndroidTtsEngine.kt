@@ -22,6 +22,8 @@ private const val TAG = "AndroidTtsEngine"
  */
 class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
 
+    override var onUtteranceStartedListener: ((sequenceId: Int, startedMs: Long) -> Unit)? = null
+
     private var tts: TextToSpeech? = null
     @Volatile private var initialized = false
     private val pendingUtterances = mutableListOf<Pair<RecognizedSentence, ((Long) -> Unit)?>>()
@@ -267,6 +269,13 @@ class AndroidTtsEngine(private val context: Context) : TextToSpeechEngine {
     private val utteranceListener = object : UtteranceProgressListener() {
         override fun onStart(uid: String?) {
             Log.d(TAG, "TTS utterance started: uid=$uid")
+            if (uid != null) {
+                val seqId = uid.split("_").firstOrNull()?.toIntOrNull()
+                if (seqId != null) {
+                    val now = System.currentTimeMillis()
+                    onUtteranceStartedListener?.invoke(seqId, now)
+                }
+            }
         }
         
         override fun onDone(uid: String?) {

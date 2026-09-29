@@ -48,10 +48,10 @@ class AdaptiveNoiseFloorVadPipeline(
     /** Gain factor scaling RMS delta into threshold adjustment. */
     private val ADAPT_GAIN = 0.25f
 
-    /** Maximum upward adjustment (noisier → higher threshold). */
-    private val MAX_RAISE = 0.10f
+    /** Maximum upward adjustment (noisier → slightly higher threshold up to 0.58). */
+    private val MAX_RAISE = 0.08f
 
-    /** Maximum downward adjustment (quieter → lower threshold). */
+    /** Maximum downward adjustment (quieter → lower threshold down to 0.35). */
     private val MAX_LOWER = 0.15f
 
     /**
@@ -70,6 +70,10 @@ class AdaptiveNoiseFloorVadPipeline(
 
     /** Silero probability threshold last used to construct the engine. */
     @Volatile private var engineThreshold: Float = baseThreshold
+
+    val currentEmaRms: Float get() = emaRms
+    val currentAdaptedThreshold: Float get() = adaptedThreshold
+    val currentBaseThreshold: Float get() = baseThreshold
 
     /** Core Silero VAD engine, recreated when threshold drifts significantly. */
     private var vadEngine: SileroVadEngine = SileroVadEngine(context, baseThreshold)
@@ -99,25 +103,45 @@ class AdaptiveNoiseFloorVadPipeline(
      */
     suspend fun processFrame(frame: ShortArray): FloatArray? = withContext(Dispatchers.Default) {
         totalFrames++
-        val vadResult = vadEngine.processFrame(frame)
+        val rawResult = vadEngine.processFrame(frame)
+
+        // Apply software dynamic threshold gating against adaptedThreshold
+        val isGatedSpeech = rawResult.speechProbability >= adaptedThreshold
+        val vadResult = VadResult(
+            speechProbability = rawResult.speechProbability,
+            isSpeech = isGatedSpeech
+        )
 
         var sum = 0.0
         for (s in frame) sum += s * s
         val rawRms = kotlin.math.sqrt(sum / frame.size)
 
         if (totalFrames % 100L == 0L) {
-            Log.d(TAG, "Frame $totalFrames | rawRms=${"%.2f".format(rawRms)} | isSpeech=${vadResult.isSpeech} | prob=${vadResult.speechProbability.fmt()} | bufSize=${speechBuffer.size} | fallback=${SileroVadEngine.isOrtUnavailable}")
+            Log.d(TAG, "Frame $totalFrames | rawRms=${"%.2f".format(rawRms)} | isSpeech=${vadResult.isSpeech} | prob=${vadResult.speechProbability.fmt()} | adaptedThresh=${adaptedThreshold.fmt()} | bufSize=${speechBuffer.size} | fallback=${SileroVadEngine.isOrtUnavailable}")
         }
         if (rawRms == 0.0 && totalFrames % 100L == 0L) {
             Log.e(TAG, "CRITICAL: AudioRecord delivering completely silent 0-filled buffers!")
         }
 
-        // Buffer frame if speech is detected OR if audio has energy (rawRms > 60.0) OR fallback mode is active
-        if (vadResult.isSpeech || rawRms > 60.0 || SileroVadEngine.isOrtUnavailable) {
+        // Buffer frame if speech is detected OR segmenter is in active speech state OR frame has speech energy (rawRms > 150.0) OR fallback mode is active
+        if (vadResult.isSpeech || segmenter.isSpeechActive || rawRms > 150.0 || SileroVadEngine.isOrtUnavailable) {
             accumulateFrame(frame)
         }
 
         val event = segmenter.process(vadResult)
+
+        val isBufferOverMax = synchronized(speechBuffer) { speechBuffer.size >= 56000 }
+
+        if (event == SegmenterEvent.SPEECH_END || isBufferOverMax) {
+            if (isBufferOverMax) {
+                Log.d(TAG, "[ITAN-VAD] Continuous speech reached 3.5s ceiling — auto-slicing segment for low latency")
+                segmenter.resetToSpeech()
+            } else {
+                val samples = speechBuffer.size
+                Log.d(TAG, "SPEECH_END — segment=$samples samples (${samples / 16000f}s)")
+            }
+            return@withContext drainBuffer()
+        }
 
         when (event) {
             SegmenterEvent.SILENCE -> {
@@ -126,28 +150,12 @@ class AdaptiveNoiseFloorVadPipeline(
             }
             SegmenterEvent.SPEECH_START -> {
                 Log.d(TAG, "SPEECH_START — threshold=${adaptedThreshold.fmt()} emaRms=${emaRms.fmt()}")
-                if (!SileroVadEngine.isOrtUnavailable && !vadResult.isSpeech && rawRms <= 60.0) {
-                    accumulateFrame(frame)
-                }
                 null
             }
             SegmenterEvent.SPEECH_CONTINUING -> {
-                if (!SileroVadEngine.isOrtUnavailable && !vadResult.isSpeech && rawRms <= 60.0) {
-                    accumulateFrame(frame)
-                }
-                // Force-flush if the segment is unreasonably long
-                if (speechBuffer.size >= MAX_SEGMENT_SAMPLES) {
-                    Log.w(TAG, "Max segment length reached (${speechBuffer.size} samples) — force-flushing")
-                    drainBuffer()
-                } else {
-                    null
-                }
+                null
             }
-            SegmenterEvent.SPEECH_END -> {
-                val samples = speechBuffer.size
-                Log.d(TAG, "SPEECH_END — segment=$samples samples (${samples / 16000f}s)")
-                drainBuffer()
-            }
+            else -> null
         }
     }
 
@@ -171,24 +179,26 @@ class AdaptiveNoiseFloorVadPipeline(
      * Enforces a minimum sample threshold (400 samples ~25ms) to ignore clicks/pops while preserving short utterances.
      */
     fun flush(): FloatArray? {
-        Log.d(TAG, "flush() requested. Current speechBuffer.size = ${speechBuffer.size}")
-        if (speechBuffer.isEmpty()) {
-            Log.w(TAG, "flush() failed: speechBuffer is completely empty")
-            return null
-        }
-        val total = speechBuffer.size
-        if (total < 400) {
-            Log.w(TAG, "flush() dropped: only $total samples (< 400)")
+        synchronized(speechBuffer) {
+            Log.d(TAG, "flush() requested. Current speechBuffer.size = ${speechBuffer.size}")
+            if (speechBuffer.isEmpty()) {
+                Log.w(TAG, "flush() failed: speechBuffer is completely empty")
+                return null
+            }
+            val total = speechBuffer.size
+            if (total < 400) {
+                Log.w(TAG, "flush() dropped: only $total samples (< 400)")
+                speechBuffer.clear()
+                return null
+            }
+            val out = FloatArray(total)
+            for (i in 0 until total) {
+                out[i] = speechBuffer[i] / 32768.0f
+            }
             speechBuffer.clear()
-            return null
+            Log.d(TAG, "flush() successfully emitted ${out.size} float samples")
+            return out
         }
-        val out = FloatArray(total)
-        for (i in 0 until total) {
-            out[i] = speechBuffer[i] / 32768.0f
-        }
-        speechBuffer.clear()
-        Log.d(TAG, "flush() successfully emitted ${out.size} float samples")
-        return out
     }
 
     /**
@@ -197,22 +207,28 @@ class AdaptiveNoiseFloorVadPipeline(
     fun close() {
         Log.d(TAG, "close()")
         vadEngine.close()
-        speechBuffer.clear()
+        synchronized(speechBuffer) {
+            speechBuffer.clear()
+        }
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     /** Append [frame] samples to [speechBuffer]. */
     private fun accumulateFrame(frame: ShortArray) {
-        for (s in frame) speechBuffer.add(s)
+        synchronized(speechBuffer) {
+            for (s in frame) speechBuffer.add(s)
+        }
     }
 
     /** Convert the accumulated [speechBuffer] to a normalised FloatArray and clear it. */
     private fun drainBuffer(): FloatArray {
-        val out = FloatArray(speechBuffer.size)
-        for (i in out.indices) out[i] = speechBuffer[i] / 32768.0f
-        speechBuffer.clear()
-        return out
+        synchronized(speechBuffer) {
+            val out = FloatArray(speechBuffer.size)
+            for (i in out.indices) out[i] = speechBuffer[i] / 32768.0f
+            speechBuffer.clear()
+            return out
+        }
     }
 
     /**
@@ -222,8 +238,8 @@ class AdaptiveNoiseFloorVadPipeline(
     private fun updateNoiseFloor(frame: ShortArray, vadResult: VadResult) {
         if (frame.isEmpty()) return
 
-        // Only update EMA when Silero is also confident it's silence (prob < 0.30)
-        if (vadResult.speechProbability >= 0.30f) return
+        // Only update EMA when Silero is confident it's true silence (prob < 0.15)
+        if (vadResult.speechProbability >= 0.15f) return
 
         // Compute normalised RMS of this frame
         var sumSq = 0.0
@@ -233,25 +249,25 @@ class AdaptiveNoiseFloorVadPipeline(
         }
         val frameRms = sqrt(sumSq / frame.size).toFloat()
 
+        // Do not update noise floor EMA if frame has speech energy (> 2.5x baseline)
+        if (frameRms > BASELINE_RMS * 2.5f) return
+
         // Update EMA
         emaRms = EMA_ALPHA * frameRms + (1f - EMA_ALPHA) * emaRms
 
         // Relative deviation from baseline
         val delta = (emaRms - BASELINE_RMS) / max(BASELINE_RMS, 1e-6f)
 
-        // Compute new threshold with asymmetric clamping
+        // Compute new threshold with asymmetric clamping (capped between 0.35 and 0.58)
         val adjustment = (delta * ADAPT_GAIN).coerceIn(-MAX_LOWER, MAX_RAISE)
-        val newThreshold = (baseThreshold + adjustment).coerceIn(0.20f, 0.90f)
+        val newThreshold = (baseThreshold + adjustment).coerceIn(0.35f, 0.58f)
 
         adaptedThreshold = newThreshold
 
-        // Swap engine only when drift is significant (>0.02) to avoid ONNX init overhead.
-        // Skip re-creation if ONNX runtime is permanently unavailable.
-        if (!SileroVadEngine.isOrtUnavailable && abs(newThreshold - engineThreshold) > 0.02f) {
-            Log.d(TAG, "Adapting engine threshold: ${engineThreshold.fmt()} → ${newThreshold.fmt()} " +
+        // Software dynamic threshold adaptation logging
+        if (abs(newThreshold - engineThreshold) > 0.02f) {
+            Log.d(TAG, "Adapting software VAD threshold: ${engineThreshold.fmt()} → ${newThreshold.fmt()} " +
                     "(emaRms=${emaRms.fmt()}, delta=${delta.fmt()})")
-            vadEngine.close()
-            vadEngine = SileroVadEngine(context, newThreshold)
             engineThreshold = newThreshold
         }
     }

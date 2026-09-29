@@ -22,29 +22,29 @@ import kotlinx.coroutines.withContext
 /**
  * ModelState tracks what lifecycle state each model is in.
  *
- * UNLOADED  → model is not in memory.
- * CHECKING  → verifying disk / download.
+ * UNLOADED    → model is not in memory.
+ * CHECKING    → verifying disk / download.
  * DOWNLOADING → downloading from remote.
- * LOADING   → being instantiated from disk into native heap.
- * READY     → loaded and available for inference.
- * RUNNING   → actively executing an inference call; MUST NOT be unloaded.
- * ERROR     → failed to load; needs retry.
+ * LOADING     → being instantiated from disk into native heap.
+ * READY       → loaded and available for inference.
+ * RUNNING     → actively executing an inference call; MUST NOT be unloaded.
+ * ERROR       → failed to load; needs retry.
  */
 sealed class ModelState {
-    object Idle        : ModelState()   // alias for UNLOADED
-    object Checking    : ModelState()
+    object Idle                                : ModelState()   // alias for UNLOADED
+    object Checking                            : ModelState()
     data class Downloading(val progress: Int) : ModelState()
-    object Loading     : ModelState()
-    object Ready       : ModelState()
-    object Running     : ModelState()   // actively inferencing — do NOT unload
-    data class Error(val message: String) : ModelState()
+    object Loading                             : ModelState()
+    object Ready                               : ModelState()
+    object Running                             : ModelState()   // actively inferencing — do NOT unload
+    data class Error(val message: String)      : ModelState()
 }
 
 private const val TAG = "ITANTRA-MODEL"
 
 class ModelManager(private val context: Context) {
 
-    var numThreads: Int = minOf(4, maxOf(2, Runtime.getRuntime().availableProcessors() / 2))
+    var numThreads: Int = 2
     val downloader = ModelDownloader(context)
 
     // ── Coroutine-safe Mutex locks (replaces Java synchronized) ─────────────
@@ -55,18 +55,16 @@ class ModelManager(private val context: Context) {
     @Volatile private var sttInferenceCount = 0
     @Volatile private var ttsInferenceCount = 0
 
-    // ── Model instances ──────────────────────────────────────────────────────
+    // ── STT Model instances ──────────────────────────────────────────────────
     @Volatile private var currentSttRecognizer: OfflineRecognizer? = null
     @Volatile var currentSttLang: String? = null
         private set
 
+    // ── TTS Model instances ──────────────────────────────────────────────────
     @Volatile private var currentTtsEngine: OfflineTts? = null
     @Volatile var currentTtsLang: String? = null
         private set
-
-    @Volatile var currentTtsSpeakerId: Int = 0
-        private set
-    @Volatile var currentTtsSharedModelId: String? = null
+    @Volatile var currentTtsModelKey: String? = null
         private set
 
     // ── Observable state ─────────────────────────────────────────────────────
@@ -82,8 +80,8 @@ class ModelManager(private val context: Context) {
         downloader.initEspeakData()
     }
 
-    // ── STT ──────────────────────────────────────────────────────────────────
-    
+    // ── Pre-download ─────────────────────────────────────────────────────────
+
     suspend fun preDownloadModels(lang: String) {
         val config = getLanguageConfig(lang) ?: return
         withContext(Dispatchers.IO) {
@@ -91,20 +89,34 @@ class ModelManager(private val context: Context) {
                 // Download STT
                 val sttFile = downloader.modelFile("stt", lang, "model.int8.onnx")
                 val sttTokens = downloader.sharedFile("stt", "tokens.txt")
-                if (config.sttModelUrl.isNotBlank() && (!sttFile.exists() || sttFile.length() == 0L)) {
+                if (!sttFile.exists() || sttFile.length() == 0L) {
                     _sttState.value = ModelState.Downloading(0)
                     downloader.downloadSync(config.sttModelUrl, sttFile) { dl, total ->
                         if (total > 0) _sttState.value = ModelState.Downloading(((dl.toFloat() / total) * 100).toInt())
                     }
                 }
-                if (config.sttTokensUrl.isNotBlank() && (!sttTokens.exists() || sttTokens.length() == 0L)) {
+                if (!sttTokens.exists() || sttTokens.length() == 0L) {
                     downloader.downloadSync(config.sttTokensUrl, sttTokens)
                 }
                 _sttState.value = ModelState.Idle
 
-                // TTS model download is bypassed — Android system TTS is used instead.
-                _ttsState.value = ModelState.Idle
-            } catch (e: Throwable) {
+                // Download TTS
+                if (config.ttsModelUrl != null) {
+                    val ttsKey = config.ttsModelKey ?: lang
+                    val ttsFile = downloader.modelFile("tts", ttsKey, "model.onnx")
+                    val ttsTokens = downloader.modelFile("tts", ttsKey, "tokens.txt")
+                    if (!ttsFile.exists() || ttsFile.length() == 0L) {
+                        _ttsState.value = ModelState.Downloading(0)
+                        downloader.downloadSync(config.ttsModelUrl, ttsFile) { dl, total ->
+                            if (total > 0) _ttsState.value = ModelState.Downloading(((dl.toFloat() / total) * 100).toInt())
+                        }
+                    }
+                    if (config.ttsTokensUrl != null && (!ttsTokens.exists() || ttsTokens.length() == 0L)) {
+                        downloader.downloadSync(config.ttsTokensUrl, ttsTokens)
+                    }
+                    _ttsState.value = ModelState.Idle
+                }
+            } catch (e: Exception) {
                 Log.e(TAG, "preDownloadModels failed", e)
                 val err = "Download failed: ${e.message}"
                 _sttState.value = ModelState.Error(err)
@@ -115,13 +127,22 @@ class ModelManager(private val context: Context) {
 
     fun isModelDownloaded(lang: String): Boolean {
         val config = getLanguageConfig(lang) ?: return false
-        if (config.sttModelUrl.isBlank()) return true
         val sttFile = downloader.modelFile("stt", lang, "model.int8.onnx")
         val sttTokens = downloader.sharedFile("stt", "tokens.txt")
         if (!sttFile.exists() || sttFile.length() == 0L) return false
         if (!sttTokens.exists() || sttTokens.length() == 0L) return false
+
+        if (config.ttsModelUrl != null) {
+            val ttsKey = config.ttsModelKey ?: lang
+            val ttsFile = downloader.modelFile("tts", ttsKey, "model.onnx")
+            val ttsTokens = downloader.modelFile("tts", ttsKey, "tokens.txt")
+            if (!ttsFile.exists() || ttsFile.length() == 0L) return false
+            if (config.ttsTokensUrl != null && (!ttsTokens.exists() || ttsTokens.length() == 0L)) return false
+        }
         return true
     }
+
+    // ── STT Lifecycle ────────────────────────────────────────────────────────
 
     suspend fun loadSttModel(lang: String): OfflineRecognizer? = sttMutex.withLock {
         // Session-level cache: already loaded and correct lang → skip reload
@@ -138,13 +159,6 @@ class ModelManager(private val context: Context) {
             return@withLock null
         }
 
-        if (!config.available) {
-            val msg = "$lang is not yet available"
-            Log.e(TAG, msg)
-            _sttState.value = ModelState.Error(msg)
-            return@withLock null
-        }
-
         withContext(Dispatchers.IO) {
             try {
                 _sttState.value = ModelState.Checking
@@ -153,43 +167,43 @@ class ModelManager(private val context: Context) {
 
                 if (!modelFile.exists() || modelFile.length() == 0L) {
                     _sttState.value = ModelState.Downloading(0)
-                    Log.d(TAG, "Downloading STT model for $lang from ${config.sttModelUrl}")
+                    Log.d(TAG, "Downloading STT model ($lang) from ${config.sttModelUrl}")
                     downloader.downloadSync(config.sttModelUrl, modelFile) { dl, total ->
                         if (total > 0) _sttState.value = ModelState.Downloading(((dl.toFloat() / total) * 100).toInt())
                     }
                 }
 
                 if (!tokensFile.exists() || tokensFile.length() == 0L) {
-                    Log.d(TAG, "Downloading shared tokens.txt")
+                    Log.d(TAG, "Downloading shared STT tokens")
                     downloader.downloadSync(config.sttTokensUrl, tokensFile)
                 }
 
                 _sttState.value = ModelState.Loading
 
-                // Release old model before loading new one
                 try { currentSttRecognizer?.release() } catch (e: Exception) { Log.w(TAG, "release old STT: ${e.message}") }
                 currentSttRecognizer = null
                 currentSttLang = null
 
                 Log.d(TAG, "Creating OfflineRecognizer for $lang")
-                val recognizer = OfflineRecognizer(
+                val rec = OfflineRecognizer(
                     assetManager = null,
                     config = OfflineRecognizerConfig().apply {
                         modelConfig = OfflineModelConfig().apply {
-                            nemo = OfflineNemoEncDecCtcModelConfig().apply { model = modelFile.absolutePath }
-                            tokens    = tokensFile.absolutePath
+                            nemo = OfflineNemoEncDecCtcModelConfig().apply {
+                                model = modelFile.absolutePath
+                            }
+                            tokens     = tokensFile.absolutePath
                             numThreads = this@ModelManager.numThreads
-                            provider  = "cpu"
+                            provider   = "cpu"
                         }
-                        decodingMethod = "greedy_search"
                     }
                 )
 
-                currentSttRecognizer = recognizer
+                currentSttRecognizer = rec
                 currentSttLang = lang
                 _sttState.value = ModelState.Ready
                 Log.d(TAG, "STT model READY for $lang")
-                recognizer
+                rec
 
             } catch (e: CancellationException) {
                 throw e
@@ -201,10 +215,6 @@ class ModelManager(private val context: Context) {
         }
     }
 
-    /**
-     * Acquire STT recognizer for inference. Caller MUST call [releaseSttForInference] when done.
-     * Returns null if not ready.
-     */
     suspend fun acquireSttForInference(): OfflineRecognizer? = sttMutex.withLock {
         val r = currentSttRecognizer ?: return@withLock null
         sttInferenceCount++
@@ -230,12 +240,11 @@ class ModelManager(private val context: Context) {
             Log.d(TAG, "Unloading STT model (lang=$currentSttLang)")
             try { currentSttRecognizer?.release() } catch (e: Exception) { Log.w(TAG, "unloadStt: ${e.message}") }
             currentSttRecognizer = null
-            // Keep currentSttLang so we know what to reload
         }
         _sttState.value = ModelState.Idle
     }
 
-    // ── TTS ──────────────────────────────────────────────────────────────────
+    // ── TTS Lifecycle ────────────────────────────────────────────────────────
 
     suspend fun loadTtsModel(lang: String): OfflineTts? = ttsMutex.withLock {
         val config = getLanguageConfig(lang) ?: run {
@@ -245,10 +254,12 @@ class ModelManager(private val context: Context) {
             return@withLock null
         }
 
-        if (currentTtsEngine != null && (currentTtsLang == lang || (config.ttsSharedModelId != null && config.ttsSharedModelId == currentTtsSharedModelId))) {
-            Log.d(TAG, "TTS model already loaded (lang or shared model matches) — reusing")
+        val targetKey = config.ttsModelKey ?: lang
+
+        // Re-use shared model if already loaded (e.g. Rasa-13 shared across hi, gu, mr, etc.)
+        if (currentTtsModelKey == targetKey && currentTtsEngine != null) {
+            Log.d(TAG, "Shared TTS model ($targetKey) already loaded for $lang — reusing instance")
             currentTtsLang = lang
-            currentTtsSpeakerId = config.ttsSpeakerId
             _ttsState.value = ModelState.Ready
             return@withLock currentTtsEngine
         }
@@ -263,19 +274,20 @@ class ModelManager(private val context: Context) {
         withContext(Dispatchers.IO) {
             try {
                 _ttsState.value = ModelState.Checking
-                val modelFile = if (config.ttsSharedModelId != null) downloader.sharedModelFile(config.ttsSharedModelId, "model.onnx") else downloader.modelFile("tts", lang, "model.onnx")
-                val tokensFile = if (config.ttsSharedModelId != null) downloader.sharedModelFile(config.ttsSharedModelId, "tokens.txt") else downloader.modelFile("tts", lang, "tokens.txt")
+                val ttsKey = config.ttsModelKey ?: lang
+                val modelFile  = downloader.modelFile("tts", ttsKey, "model.onnx")
+                val tokensFile = downloader.modelFile("tts", ttsKey, "tokens.txt")
 
                 if (!modelFile.exists() || modelFile.length() == 0L) {
                     _ttsState.value = ModelState.Downloading(0)
-                    Log.d(TAG, "Downloading TTS model for $lang from ${config.ttsModelUrl}")
+                    Log.d(TAG, "Downloading TTS model ($ttsKey) from ${config.ttsModelUrl}")
                     downloader.downloadSync(config.ttsModelUrl, modelFile) { dl, total ->
                         if (total > 0) _ttsState.value = ModelState.Downloading(((dl.toFloat() / total) * 100).toInt())
                     }
                 }
 
                 if (config.ttsTokensUrl != null && (!tokensFile.exists() || tokensFile.length() == 0L)) {
-                    Log.d(TAG, "Downloading TTS tokens for $lang")
+                    Log.d(TAG, "Downloading TTS tokens ($ttsKey)")
                     downloader.downloadSync(config.ttsTokensUrl, tokensFile)
                 }
 
@@ -284,9 +296,9 @@ class ModelManager(private val context: Context) {
                 try { currentTtsEngine?.release() } catch (e: Exception) { Log.w(TAG, "release old TTS: ${e.message}") }
                 currentTtsEngine = null
                 currentTtsLang = null
-                currentTtsSharedModelId = null
+                currentTtsModelKey = null
 
-                Log.d(TAG, "Creating OfflineTts for $lang")
+                Log.d(TAG, "Creating OfflineTts for $lang (modelKey=$targetKey)")
                 val tts = OfflineTts(
                     assetManager = null,
                     config = OfflineTtsConfig().apply {
@@ -294,7 +306,7 @@ class ModelManager(private val context: Context) {
                             vits = OfflineTtsVitsModelConfig().apply {
                                 model   = modelFile.absolutePath
                                 tokens  = tokensFile.absolutePath
-                                dataDir = if (config.ttsSharedModelId != null) "" else downloader.espeakDataDir.absolutePath
+                                dataDir = downloader.espeakDataDir.absolutePath
                             }
                             numThreads = this@ModelManager.numThreads
                             provider   = "cpu"
@@ -304,10 +316,9 @@ class ModelManager(private val context: Context) {
 
                 currentTtsEngine = tts
                 currentTtsLang = lang
-                currentTtsSpeakerId = config.ttsSpeakerId
-                currentTtsSharedModelId = config.ttsSharedModelId
+                currentTtsModelKey = targetKey
                 _ttsState.value = ModelState.Ready
-                Log.d(TAG, "TTS model READY for $lang (speaker_id=$currentTtsSpeakerId)")
+                Log.d(TAG, "TTS model READY for $lang (modelKey=$targetKey)")
                 tts
 
             } catch (e: CancellationException) {
@@ -342,9 +353,11 @@ class ModelManager(private val context: Context) {
             return@withLock
         }
         if (currentTtsEngine != null) {
-            Log.d(TAG, "Unloading TTS model (lang=$currentTtsLang)")
+            Log.d(TAG, "Unloading TTS model (lang=$currentTtsLang, modelKey=$currentTtsModelKey)")
             try { currentTtsEngine?.release() } catch (e: Exception) { Log.w(TAG, "unloadTts: ${e.message}") }
             currentTtsEngine = null
+            currentTtsLang = null
+            currentTtsModelKey = null
         }
         _ttsState.value = ModelState.Idle
     }
