@@ -57,4 +57,6 @@ data class RecognizedSentence(
     val isAlert: Boolean,
     val timestampMs: Long,
     val sequenceId: Int,
+    val inferenceDurationMs: Long = 0L,
+    val rtf: Float = 0f,
 )
