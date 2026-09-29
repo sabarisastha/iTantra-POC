@@ -1,4 +1,4 @@
-﻿@rem
+@rem
 @rem Copyright 2015 the original author or authors.
 @rem
 @rem Licensed under the Apache License, Version 2.0 (the "License");
@@ -74,10 +74,6 @@ set CLASSPATH=%APP_HOME%\gradle\wrapper\gradle-wrapper.jar
 "%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" org.gradle.wrapper.GradleWrapperMain %*
 
 :fail
-rem Set variable GRADLE_EXIT_CONSOLE if you would like the script to return the
-rem exit code instead of exiting the script if the console is closed while
-rem running the script.
-if %ERRORLEVEL% neq 0 set EXIT_CODE=%ERRORLEVEL%
-if %EXIT_CODE% equ 0 set EXIT_CODE=1
+set EXIT_CODE=%ERRORLEVEL%
 if "%GRADLE_EXIT_CONSOLE%"=="1" exit /b %EXIT_CODE%
-exit %EXIT_CODE%
+exit /b %EXIT_CODE%

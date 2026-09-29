@@ -334,7 +334,9 @@ class ModelManager(private val context: Context) {
                 null
             }
         }
-        }
+    }
+}
+
 
     suspend fun acquireTtsForInference(): OfflineTts? = ttsMutex.withLock {
         val t = currentTtsEngine ?: return@withLock null
