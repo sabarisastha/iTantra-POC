@@ -1,4 +1,4 @@
-﻿package com.itantra.session
+package com.itantra.session
 
 /**
  * Direction of a transcript entry relative to this device.
@@ -32,21 +32,29 @@ data class TranscriptEntry(
     val sentMs: Long,
     /** When the payload was dequeued from the receive flow. 0 for SENT entries. */
     val receivedMs: Long,
-    /** When TTS.speak() was invoked. 0 for SENT entries. */
+    /** When TTS playback actually begins on speaker. 0 for SENT entries. */
     val ttsStartedMs: Long,
+
+    val sttDurationMs: Long = 0L,
+    val sttRtf: Float = 0f,
+
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val accuracy: Float? = null,
+    val locationStatus: String? = null,
 ) {
-    /** Model inference latency (0 ms in mock; real value in production). */
-    val deltaModelMs: Long   get() = sttCompleteMs - micPauseDetectedMs
+    /** Model inference latency. */
+    val deltaModelMs: Long   get() = if (sttDurationMs > 0L) sttDurationMs else (if (sttCompleteMs >= micPauseDetectedMs) sttCompleteMs - micPauseDetectedMs else 0L)
 
     /** Time from STT output to bytes on the wire. */
     val deltaQueueMs: Long   get() = sentMs - sttCompleteMs
 
     /** Network + socket latency. Meaningful only for RECEIVED entries. */
-    val deltaNetworkMs: Long get() = if (receivedMs > 0L) receivedMs - sentMs else 0L
+    val deltaNetworkMs: Long get() = if (receivedMs > 0L) (receivedMs - sentMs).coerceAtLeast(0L) else 0L
 
-    /** Receive-to-TTS latency. Meaningful only for RECEIVED entries. */
+    /** Receive-to-TTS latency (time until audio actually begins playing). Meaningful only for RECEIVED entries. */
     val deltaTtsStartMs: Long get() =
-        if (ttsStartedMs > 0L && receivedMs > 0L) ttsStartedMs - receivedMs else 0L
+        if (ttsStartedMs > 0L && receivedMs > 0L) (ttsStartedMs - receivedMs).coerceAtLeast(0L) else 0L
 
     /** Total end-to-end latency: mic pause → TTS started. */
     val totalLatencyMs: Long get() =

@@ -7,6 +7,7 @@ import com.itantra.transport.ConnectionState
 import com.itantra.transport.Payload
 import com.itantra.transport.PayloadType
 import com.itantra.transport.TransportChannel
+import com.itantra.transport.TransportManager
 import com.itantra.tts.TextToSpeechEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -63,6 +64,12 @@ class SessionController(
     private val _sessionValidated = MutableStateFlow(false)
     val sessionValidated: StateFlow<Boolean> = _sessionValidated.asStateFlow()
 
+    private val _telemetry = MutableStateFlow(com.itantra.telemetry.TelemetryState())
+    val telemetry: StateFlow<com.itantra.telemetry.TelemetryState> = _telemetry.asStateFlow()
+
+    private val _liveLocationState = MutableStateFlow(com.itantra.utils.LiveLocationState())
+    val liveLocationState: StateFlow<com.itantra.utils.LiveLocationState> = _liveLocationState.asStateFlow()
+
     @Volatile private var localFloorRequestTimestamp: Long = 0L
     @Volatile private var localModeChangeTimestamp: Long = 0L
     private var floorTimeoutJob: Job? = null
@@ -72,9 +79,32 @@ class SessionController(
 
     init {
         Log.d(TAG, "SessionController initialized localPeerId=$localPeerId")
+        ttsEngine.onUtteranceStartedListener = { sequenceId, startedMs ->
+            handleUtteranceStarted(sequenceId, startedMs)
+        }
         collectOutgoing()
         collectIncoming()
         monitorConnectionState()
+    }
+
+    private fun handleUtteranceStarted(sequenceId: Int, startedMs: Long) {
+        _transcript.update { list ->
+            list.map { entry ->
+                if (entry.sequenceId == sequenceId && entry.direction == Direction.RECEIVED) {
+                    val ttsLatency = if (entry.receivedMs > 0L) (startedMs - entry.receivedMs).coerceAtLeast(1L) else 0L
+                    val netMs = if (entry.sentMs > 0L && entry.receivedMs > 0L) (entry.receivedMs - entry.sentMs).coerceAtLeast(0L) else 0L
+                    val sttMs = if (entry.sttDurationMs > 0L) entry.sttDurationMs else 0L
+                    val totalE2E = sttMs + netMs + ttsLatency
+                    _telemetry.value = _telemetry.value.copy(
+                        ttsLatencyMs = ttsLatency,
+                        e2eLatencyMs = totalE2E
+                    )
+                    entry.copy(ttsStartedMs = startedMs)
+                } else {
+                    entry
+                }
+            }
+        }
     }
 
     // ── Connection monitoring ─────────────────────────────────────────────────
@@ -295,16 +325,17 @@ class SessionController(
         latitude: Double? = null,
         longitude: Double? = null,
         accuracy: Float? = null,
+        locationTimestampMs: Long? = null,
         locationStatus: String? = null,
     ) {
-        Log.d(TAG, "triggerAlert(lat=$latitude, lon=$longitude, acc=$accuracy, status=$locationStatus)")
+        Log.d(TAG, "triggerAlert(lat=$latitude, lon=$longitude, acc=$accuracy, ts=$locationTimestampMs, status=$locationStatus)")
         scope.launch {
             sendSentence(
                 sentence = RecognizedSentence(
                     text         = "[ALERT] Manual alert triggered by operator",
                     languageCode = _selectedLanguage.value.code,
                     isAlert      = true,
-                    timestampMs  = System.currentTimeMillis(),
+                    timestampMs  = locationTimestampMs ?: System.currentTimeMillis(),
                     sequenceId   = -1,
                 ),
                 latitude = latitude,
@@ -368,6 +399,15 @@ class SessionController(
         locationStatus: String? = null,
     ) {
         val sttCompleteMs = System.currentTimeMillis()
+        val sttLatency = if (sentence.inferenceDurationMs > 0L) {
+            sentence.inferenceDurationMs
+        } else if (sentence.timestampMs > 0L && sttCompleteMs >= sentence.timestampMs) {
+            sttCompleteMs - sentence.timestampMs
+        } else {
+            0L
+        }
+        val rtfVal = if (sentence.rtf > 0f) sentence.rtf else (if (sttLatency > 0) (sttLatency / 1000.0f) else 0.0f)
+
         val payload = Payload(
             type            = if (sentence.isAlert) PayloadType.ALERT else PayloadType.SPEECH,
             text            = sentence.text,
@@ -379,9 +419,24 @@ class SessionController(
             longitude       = longitude,
             accuracy        = accuracy,
             locationStatus  = locationStatus,
+            sttLatencyMs    = sttLatency,
+            rtf             = rtfVal,
         )
         runCatching { transport.send(payload) }
             .onFailure { e -> Log.e(TAG, "transport.send() failed", e) }
+
+        val encodedBytes = runCatching { com.itantra.transport.binary.BinaryEncoder.encode(payload).size }.getOrDefault(128)
+        val transportLabel = (transport as? TransportManager)?.activeKind?.value?.label ?: "Bluetooth"
+
+        _telemetry.value = com.itantra.telemetry.TelemetryState(
+            sttLatencyMs   = sttLatency,
+            ttsLatencyMs   = _telemetry.value.ttsLatencyMs,
+            rtf            = rtfVal,
+            e2eLatencyMs   = sttLatency,
+            payloadBytes   = encodedBytes,
+            activeLanguage = sentence.languageCode.ifBlank { _selectedLanguage.value.code },
+            transport      = transportLabel,
+        )
 
         appendTranscript(
             TranscriptEntry(
@@ -396,6 +451,12 @@ class SessionController(
                 sentMs             = System.currentTimeMillis(),
                 receivedMs         = 0L,
                 ttsStartedMs       = 0L,
+                sttDurationMs      = sttLatency,
+                sttRtf             = rtfVal,
+                latitude           = latitude,
+                longitude          = longitude,
+                accuracy           = accuracy,
+                locationStatus     = locationStatus,
             )
         )
     }
@@ -610,14 +671,30 @@ class SessionController(
 
         val receivedMs = payload.receivedTimestampMs.takeIf { it > 0L } ?: System.currentTimeMillis()
         val sentence = RecognizedSentence(
-            text         = payload.text,
-            languageCode = payload.languageCode,
-            isAlert      = payload.type == PayloadType.ALERT,
-            timestampMs  = payload.sentTimestampMs,
-            sequenceId   = payload.sequenceId,
+            text                = payload.text,
+            languageCode        = payload.languageCode,
+            isAlert             = payload.type == PayloadType.ALERT,
+            timestampMs         = payload.sentTimestampMs,
+            sequenceId          = payload.sequenceId,
+            inferenceDurationMs = payload.sttLatencyMs,
+            rtf                 = payload.rtf,
         )
 
-        val ttsStartedMs = System.currentTimeMillis()
+        val encodedBytes = runCatching { com.itantra.transport.binary.BinaryEncoder.encode(payload).size }.getOrDefault(128)
+        val transportLabel = (transport as? TransportManager)?.activeKind?.value?.label ?: "Bluetooth"
+
+        val initialNetMs = if (payload.sentTimestampMs > 0L) (receivedMs - payload.sentTimestampMs).coerceAtLeast(0L) else 0L
+        _telemetry.value = com.itantra.telemetry.TelemetryState(
+            sttLatencyMs   = payload.sttLatencyMs,
+            ttsLatencyMs   = _telemetry.value.ttsLatencyMs,
+            rtf            = payload.rtf,
+            e2eLatencyMs   = payload.sttLatencyMs + initialNetMs + _telemetry.value.ttsLatencyMs,
+            payloadBytes   = encodedBytes,
+            activeLanguage = payload.languageCode.ifBlank { localLang },
+            transport      = transportLabel,
+        )
+
+        ttsEngine.speak(sentence)
 
         scope.launch {
             try {
@@ -647,7 +724,13 @@ class SessionController(
                 sttCompleteMs      = payload.sentTimestampMs,
                 sentMs             = payload.sentTimestampMs,
                 receivedMs         = receivedMs,
-                ttsStartedMs       = ttsStartedMs,
+                ttsStartedMs       = 0L,
+                sttDurationMs      = payload.sttLatencyMs,
+                sttRtf             = payload.rtf,
+                latitude           = payload.latitude,
+                longitude          = payload.longitude,
+                accuracy           = payload.accuracy,
+                locationStatus     = payload.locationStatus,
             )
         )
     }
