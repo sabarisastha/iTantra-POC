@@ -41,15 +41,19 @@ class IndicConformerSttEngine(
 
     private var audioRecorder: AudioRecorder? = null
     private var vadPipeline: AdaptiveNoiseFloorVadPipeline? = null
+    private var frameChannel: Channel<ShortArray>? = null
+    private var frameWorkerJob: Job? = null
     private val sequenceIdCounter = AtomicInteger(0)
 
     @Volatile private var isRecording = false
     @Volatile private var isShutdown = false
+    @Volatile private var isContinuousMode = false
 
     private sealed interface Command {
         object Start : Command
         object Stop : Command
         data class SetLang(val langCode: String) : Command
+        data class SetContinuous(val enabled: Boolean) : Command
     }
 
     private val commandChannel = Channel<Command>(Channel.UNLIMITED)
@@ -60,9 +64,10 @@ class IndicConformerSttEngine(
                 if (isShutdown) break
                 try {
                     when (cmd) {
-                        is Command.Start   -> handleStart()
-                        is Command.Stop    -> handleStop()
-                        is Command.SetLang -> handleSetLanguage(cmd.langCode)
+                        is Command.Start         -> handleStart()
+                        is Command.Stop          -> handleStop()
+                        is Command.SetLang       -> handleSetLanguage(cmd.langCode)
+                        is Command.SetContinuous -> isContinuousMode = cmd.enabled
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error processing STT command $cmd", e)
@@ -78,9 +83,15 @@ class IndicConformerSttEngine(
         commandChannel.trySend(Command.SetLang(languageCode))
     }
 
+    override fun setContinuousMode(enabled: Boolean) {
+        Log.d(TAG, "setContinuousMode($enabled)")
+        isContinuousMode = enabled
+        commandChannel.trySend(Command.SetContinuous(enabled))
+    }
+
     override fun start() {
         if (isShutdown) return
-        Log.d(TAG, "IndicConformerSttEngine.start() invoked, queueing START command")
+        Log.d(TAG, "IndicConformerSttEngine.start() invoked (continuous=$isContinuousMode), queueing START command")
         commandChannel.trySend(Command.Start)
     }
 
@@ -94,6 +105,10 @@ class IndicConformerSttEngine(
         isShutdown = true
         commandChannel.close()
         isRecording = false
+        frameChannel?.close()
+        frameWorkerJob?.cancel()
+        frameWorkerJob = null
+        frameChannel = null
         audioRecorder?.stopRecording()
         audioRecorder = null
         vadPipeline?.close()
@@ -115,12 +130,28 @@ class IndicConformerSttEngine(
             return
         }
 
-        Log.d(TAG, "IndicConformerSttEngine.start() invoked, starting AudioRecorder")
+        Log.d(TAG, "IndicConformerSttEngine.start() invoked, starting AudioRecorder (continuous=$isContinuousMode)")
         isRecording = true
 
         // Create a fresh VAD pipeline for this recording session
         val pipeline = AdaptiveNoiseFloorVadPipeline(context)
         vadPipeline = pipeline
+
+        // Sequential frame processing channel to guarantee in-order execution without thread race conditions
+        val channel = Channel<ShortArray>(capacity = 128)
+        frameChannel = channel
+
+        frameWorkerJob?.cancel()
+        frameWorkerJob = scope.launch(Dispatchers.Default) {
+            for (frame in channel) {
+                if (!isRecording) break
+                val segment = pipeline.processFrame(frame, isContinuousMode = isContinuousMode)
+                if (segment != null) {
+                    Log.d(TAG, "[ITAN-STT] VAD speech segment complete: ${segment.size} samples (${segment.size / 16000f}s) — dispatching to STT")
+                    processSpeechSegment(segment)
+                }
+            }
+        }
 
         // Accumulator for partial Silero frames (512 samples each)
         val frameAccum = ShortArray(SILERO_FRAME_SIZE)
@@ -143,19 +174,11 @@ class IndicConformerSttEngine(
                     framePos = 0
                     totalFramesDispatched++
                     if (totalFramesDispatched == 1) {
-                        Log.d(TAG, "[ITAN-STT] First 512-sample frame dispatched to AdaptiveNoiseFloorVadPipeline")
+                        Log.d(TAG, "[ITAN-STT] First 512-sample frame queued to sequential VAD worker")
                     } else if (totalFramesDispatched % 50 == 0) {
                         Log.v(TAG, "[ITAN-STT] VAD pipeline tick: $totalFramesDispatched frames processed")
                     }
-                    // Launch in scope so we don't block the audio callback thread
-                    scope.launch {
-                        if (!isRecording) return@launch
-                        val segment = pipeline.processFrame(frame)
-                        if (segment != null) {
-                            Log.d(TAG, "[ITAN-STT] VAD speech segment complete: ${segment.size} samples (${segment.size / 16000f}s) — dispatching to STT")
-                            processSpeechSegment(segment)
-                        }
-                    }
+                    channel.trySend(frame)
                 }
             }
         }
@@ -171,6 +194,11 @@ class IndicConformerSttEngine(
 
         audioRecorder?.stopRecording()
         audioRecorder = null
+
+        frameChannel?.close()
+        frameChannel = null
+        frameWorkerJob?.cancel()
+        frameWorkerJob = null
 
         val remainingSegment = vadPipeline?.flush()
         vadPipeline?.close()

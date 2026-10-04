@@ -25,7 +25,7 @@ private const val BENCH_TAG = "TTS_BENCH"
 class IndicParlerTtsEngine(
     private val context: Context,
     private val modelManager: ModelManager,
-    private val audioPlayer: AudioPlayer = AudioPlayer()
+    private val audioPlayer: AudioPlayer = AudioPlayer(context)
 ) : TextToSpeechEngine {
 
     private val scope =
@@ -86,6 +86,13 @@ class IndicParlerTtsEngine(
     override fun speak(
         sentence: RecognizedSentence
     ) {
+        speak(sentence, null)
+    }
+
+    override fun speak(
+        sentence: RecognizedSentence,
+        onAudioReady: ((ttsLatencyMs: Long) -> Unit)?
+    ) {
 
         if (isShutdown) {
 
@@ -131,7 +138,8 @@ class IndicParlerTtsEngine(
                         synthesizeAndPlay(
                             sentence = sentence,
                             t0 = t0,
-                            t1 = t1
+                            t1 = t1,
+                            onAudioReady = onAudioReady
                         )
 
                     } finally {
@@ -187,7 +195,8 @@ class IndicParlerTtsEngine(
                 synthesizeAndPlay(
                     sentence = sentence,
                     t0 = t0,
-                    t1 = t1
+                    t1 = t1,
+                    onAudioReady = onAudioReady
                 )
             }
     }
@@ -199,7 +208,8 @@ class IndicParlerTtsEngine(
     private suspend fun synthesizeAndPlay(
         sentence: RecognizedSentence,
         t0: Long,
-        t1: Long
+        t1: Long,
+        onAudioReady: ((ttsLatencyMs: Long) -> Unit)? = null
     ) {
 
         Log.d(
@@ -266,7 +276,8 @@ class IndicParlerTtsEngine(
                 expectedLanguage,
                 t0,
                 t1,
-                t2
+                t2,
+                onAudioReady
             )
 
             return
@@ -288,7 +299,8 @@ class IndicParlerTtsEngine(
                 expectedLanguage,
                 t0,
                 t1,
-                t2
+                t2,
+                onAudioReady
             )
 
             return
@@ -361,6 +373,12 @@ class IndicParlerTtsEngine(
             var totalGeneratedSamples = 0
 
             try {
+
+                Log.i(
+                    TAG,
+                    "[TTS] text=\"${sentence.text}\" lang=$expectedLanguage seq=${sentence.sequenceId}"
+                )
+                Log.i(TAG, "[TTS] synthesis START")
 
                 /*
                  * PRODUCER
@@ -452,7 +470,28 @@ class IndicParlerTtsEngine(
                                 false
                         )
                     )
+
+                    if (chunkNumber == 1) {
+                        val latency = (System.currentTimeMillis() - t1).coerceAtLeast(1L)
+                        onAudioReady?.invoke(latency)
+                    }
                 }
+
+                val totalDurationMs =
+                    if (sampleRate > 0) {
+                        totalGeneratedSamples * 1000L / sampleRate
+                    } else {
+                        0L
+                    }
+
+                Log.i(
+                    TAG,
+                    "[TTS] synthesis END " +
+                            "samples=$totalGeneratedSamples " +
+                            "sampleRate=$sampleRate " +
+                            "durationMs=${totalDurationMs}ms " +
+                            "format=Float[-1,1]->PCM16"
+                )
 
                 /*
                  * Explicit End Of Stream.
@@ -572,7 +611,8 @@ class IndicParlerTtsEngine(
                     expectedLanguage,
                     t0,
                     t1,
-                    t2
+                    t2,
+                    onAudioReady
                 )
             }
 
@@ -592,7 +632,8 @@ class IndicParlerTtsEngine(
         languageCode: String,
         t0: Long,
         t1: Long,
-        t2: Long
+        t2: Long,
+        onAudioReady: ((ttsLatencyMs: Long) -> Unit)? = null
     ) {
 
         Log.w(
@@ -629,6 +670,8 @@ class IndicParlerTtsEngine(
 
         val end =
             System.currentTimeMillis()
+
+        onAudioReady?.invoke((end - start).coerceAtLeast(1L))
 
         Log.i(
             BENCH_TAG,
@@ -708,10 +751,11 @@ class IndicParlerTtsEngine(
 
         /*
          * 1. Prefer locally cached synthesized PCM.
+         * If sequenceId does not match, fallback to most recently cached utterance.
          */
         val cachedAudio =
             synchronized(replayLock) {
-                replayCache[sequenceId]
+                replayCache[sequenceId] ?: replayCache.values.lastOrNull()
             }
 
         if (cachedAudio != null) {
@@ -719,7 +763,7 @@ class IndicParlerTtsEngine(
             Log.d(
                 TAG,
                 "[TTS] Replay cached local audio " +
-                        "seq=$sequenceId"
+                        "seq=$sequenceId (cacheCount=${replayCache.size})"
             )
 
             scope.launch(Dispatchers.IO) {
@@ -742,7 +786,7 @@ class IndicParlerTtsEngine(
          */
         val cachedSentence =
             synchronized(replayLock) {
-                fallbackReplayCache[sequenceId]
+                fallbackReplayCache[sequenceId] ?: fallbackReplayCache.values.lastOrNull()
             }
 
         if (cachedSentence != null) {
@@ -762,7 +806,7 @@ class IndicParlerTtsEngine(
 
         Log.w(
             TAG,
-            "[TTS] No replay cache for seq=$sequenceId"
+            "[TTS] No replay cache for seq=$sequenceId (cacheCount=${replayCache.size})"
         )
 
         return false

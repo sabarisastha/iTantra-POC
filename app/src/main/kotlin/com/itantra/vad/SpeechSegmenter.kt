@@ -23,7 +23,7 @@ class SpeechSegmenter(
     private val speechStartThreshold: Float = 0.50f,
     private val speechEndThreshold: Float = 0.35f,
     private val attackFrames: Int = 3,          // ~96 ms voiced before SPEECH_START
-    private val hangoverFrames: Int = 16,       // ~512 ms silence before SPEECH_END
+    private val hangoverFrames: Int = 35,       // ~1120 ms silence before SPEECH_END (prevents cutting sentences on natural pauses)
 ) {
     private enum class State { IN_SILENCE, IN_SPEECH }
 

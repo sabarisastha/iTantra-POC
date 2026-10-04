@@ -38,6 +38,11 @@ interface SpeechToTextEngine {
      */
     fun stop()
 
+    /**
+     * Set continuous capture mode (true for Phone/hands-free mode, false for PTT).
+     */
+    fun setContinuousMode(enabled: Boolean) {}
+
     /** Release all STT resources. Safe to call multiple times. */
     fun shutdown() {}
 }

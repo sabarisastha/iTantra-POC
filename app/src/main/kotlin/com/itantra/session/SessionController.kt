@@ -94,7 +94,6 @@ class SessionController(
     private var locationSyncJob: Job? = null
 
     @Volatile private var localFloorRequestTimestamp: Long = 0L
-    @Volatile private var localModeChangeTimestamp: Long = 0L
     private var floorTimeoutJob: Job? = null
     private var heartbeatJob: Job? = null
 
@@ -263,15 +262,20 @@ class SessionController(
                         ttsEngine.prewarm(_selectedLanguage.value.code)
                         startHeartbeat()
                         startLocationSync()
+
+                        // Deterministic initial session mode: both peers always start in Walkie-Talkie / PTT mode
+                        _mode.value = SessionMode.PTT
+                        _floorState.value = FloorState.IDLE
+                        sttEngine.setContinuousMode(false)
+                        sttEngine.stop()
+                        stopPhoneModeAudio()
+                        Log.i(TAG, "[MODE] Initial connection established: deterministic mode = PTT")
+
                         Log.d(TAG, "[ITANTRA-SESSION] state=CONNECTED — sending SESSION_INIT")
                         sendControlPayload(
                             PayloadType.CONTROL,
-                            text = "SESSION_INIT:${_selectedLanguage.value.code}:${_mode.value.name}"
+                            text = "SESSION_INIT:${_selectedLanguage.value.code}:PTT"
                         )
-                        if (_mode.value == SessionMode.PHONE) {
-                            Log.d(TAG, "[ITANTRA-SESSION] Connected in PHONE mode — auto-starting phone audio")
-                            startPhoneModeAudio()
-                        }
                     }
                     is ConnectionState.Error -> {
                         val transportType = (transport as? TransportManager)?.activeKind?.value?.label ?: "P2P"
@@ -366,15 +370,23 @@ class SessionController(
     // ── Session Controls ──────────────────────────────────────────────────────
 
     fun switchMode(targetMode: SessionMode) {
-        if (!isSessionActive()) {
-            _mode.value = targetMode
+        val old = _mode.value
+        Log.i(TAG, "[MODE] LOCAL change: $old -> $targetMode")
+        Log.i(TAG, "[MODE] current local mode=$old, target local mode=$targetMode")
+        if (old == targetMode) {
+            Log.d(TAG, "[MODE] Already in mode $targetMode — no-op")
             return
         }
-        val timestamp = System.currentTimeMillis()
-        localModeChangeTimestamp = timestamp
+
         applyModeTransition(targetMode)
-        scope.launch {
-            sendControlPayload(PayloadType.MODE_CHANGE, text = targetMode.name, timestamp = timestamp)
+
+        if (isSessionActive()) {
+            Log.i(TAG, "[MODE] Sending MODE_CHANGE: ${targetMode.name}")
+            scope.launch {
+                sendControlPayload(PayloadType.MODE_CHANGE, text = targetMode.name, timestamp = System.currentTimeMillis())
+            }
+        } else {
+            Log.d(TAG, "[MODE] Session not active — local mode updated without network send")
         }
     }
 
@@ -387,6 +399,8 @@ class SessionController(
         _mode.value = newMode
         when {
             old == SessionMode.PTT && newMode == SessionMode.PHONE -> {
+                // PTT -> PHONE: release floor cleanly, then start continuous VAD-gated STT.
+                // Phone Mode is full-duplex text — no floor control, no raw PCM.
                 if (_floorState.value == FloorState.LOCAL_TRANSMITTING ||
                     _floorState.value == FloorState.WAITING_FOR_CHANNEL) {
                     scope.launch { sendControlPayload(PayloadType.RELEASE_FLOOR) }
@@ -394,13 +408,22 @@ class SessionController(
                 floorTimeoutJob?.cancel()
                 _floorState.value = FloorState.IDLE
                 sttEngine.stop()
-                startPhoneModeAudio()
+                sttEngine.setContinuousMode(true)
+                if (isSessionActive()) {
+                    sttEngine.start()
+                }
+                Log.i(TAG, "[MODE] PTT pipeline STOP: floor released, PTT STT stopped")
+                Log.i(TAG, "[MODE] Phone/VAD pipeline START: continuous VAD-gated STT started")
             }
             old == SessionMode.PHONE && newMode == SessionMode.PTT -> {
-                stopPhoneModeAudio()
+                // PHONE -> PTT: stop continuous STT; clean up audio resources; floor control takes over.
                 sttEngine.stop()
+                sttEngine.setContinuousMode(false)
+                stopPhoneModeAudio()
                 floorTimeoutJob?.cancel()
                 _floorState.value = FloorState.IDLE
+                Log.i(TAG, "[MODE] Phone/VAD pipeline STOP: continuous STT stopped, mic idle")
+                Log.i(TAG, "[MODE] PTT pipeline START: floor control idle, awaiting PTT press")
             }
         }
     }
@@ -690,11 +713,9 @@ class SessionController(
             sttEngine.recognizedSentences
                 .catch { e -> Log.e(TAG, "STT flow error", e) }
                 .collect { sentence ->
-                    if (_mode.value == SessionMode.PHONE) {
-                        Log.w(TAG, "STT emission in PHONE mode — discarded (use raw PCM)")
-                    } else {
-                        sendSentence(sentence)
-                    }
+                    // Both PTT and PHONE modes transmit recognized text payloads.
+                    // Phone Mode uses continuous VAD-gated STT (no floor control).
+                    sendSentence(sentence)
                 }
         }
     }
@@ -832,14 +853,12 @@ class SessionController(
             }
 
             _sessionValidated.value = true
-            Log.d(TAG, "[ITANTRA-SESSION] Session VALIDATED — localLang=$localLang remoteLang=$remoteLang mode=$remoteMode")
+            Log.d(TAG, "[ITANTRA-SESSION] Session VALIDATED — localLang=$localLang remoteLang=$remoteLang initialMode=PTT")
 
-            val parsedMode = runCatching { SessionMode.valueOf(remoteMode) }.getOrNull()
-            if (parsedMode != null && parsedMode != _mode.value) {
-                applyModeTransition(parsedMode)
-            } else if (_mode.value == SessionMode.PHONE) {
-                if (phoneAudioRecorder == null) startPhoneModeAudio()
-            }
+            // Deterministic initial mode on connection is PTT
+            _mode.value = SessionMode.PTT
+            _floorState.value = FloorState.IDLE
+            sttEngine.setContinuousMode(false)
 
         } else if (text.startsWith("SESSION_REJECT:")) {
             Log.e(TAG, "[ITANTRA-SESSION] Remote rejected session: $text")
@@ -849,27 +868,24 @@ class SessionController(
     }
 
     private fun handleIncomingModeChange(payload: Payload) {
-        val requestedMode = runCatching { SessionMode.valueOf(payload.text) }.getOrNull() ?: return
-        Log.d(TAG, "Incoming MODE_CHANGE to $requestedMode from ${payload.senderId}")
-        if (_mode.value == requestedMode) return
-
-        val localTime  = localModeChangeTimestamp
-        val remoteTime = payload.sentTimestampMs
-
-        if (localTime > 0L && Math.abs(System.currentTimeMillis() - localTime) < 3000L) {
-            val localWins = when {
-                localTime < remoteTime -> true
-                localTime > remoteTime -> false
-                else -> localPeerId < payload.senderId
-            }
-            if (localWins) {
-                scope.launch {
-                    sendControlPayload(PayloadType.MODE_CHANGE, text = _mode.value.name, timestamp = localTime)
-                }
-                return
-            }
+        val requestedMode = runCatching { SessionMode.valueOf(payload.text) }.getOrNull()
+        if (requestedMode == null) {
+            Log.w(TAG, "[MODE] Malformed MODE_CHANGE payload: \"${payload.text}\"")
+            return
         }
+
+        Log.i(TAG, "[MODE] Received MODE_CHANGE: ${requestedMode.name}")
+        Log.i(TAG, "[MODE] current local mode=${_mode.value}, received remote mode=${requestedMode.name}")
+
+        val old = _mode.value
+        if (old == requestedMode) {
+            Log.d(TAG, "[MODE] Already in mode $requestedMode — ignoring duplicate remote update (rebroadcast=false)")
+            return
+        }
+
+        Log.i(TAG, "[MODE] REMOTE update: $old -> $requestedMode (rebroadcast=false)")
         applyModeTransition(requestedMode)
+        // Strictly do NOT rebroadcast to peer: remote updates only update local state and pipeline!
     }
 
     private fun handleIncomingFloorRequest(payload: Payload) {
@@ -1012,6 +1028,11 @@ class SessionController(
         )
 
         appendTranscript(entry)
+
+        Log.i(
+            TAG,
+            "[RECEIVER] Received text: \"${payload.text}\" lang=${payload.languageCode} seq=${payload.sequenceId} engine=${ttsEngine::class.simpleName} timestamp=$receivedMs"
+        )
 
         // Asynchronously speak and measure true TTS synthesis latency via callback
         ttsEngine.speak(sentence) { actualTtsMs ->

@@ -97,7 +97,7 @@ class AdaptiveNoiseFloorVadPipeline(
      * @return A completed speech segment as FloatArray [-1.0, 1.0] when a SPEECH_END event
      *         fires, or null while silence / mid-utterance accumulation is ongoing.
      */
-    suspend fun processFrame(frame: ShortArray): FloatArray? = withContext(Dispatchers.Default) {
+    suspend fun processFrame(frame: ShortArray, isContinuousMode: Boolean = true): FloatArray? = withContext(Dispatchers.Default) {
         totalFrames++
         val vadResult = vadEngine.processFrame(frame)
 
@@ -145,8 +145,13 @@ class AdaptiveNoiseFloorVadPipeline(
             }
             SegmenterEvent.SPEECH_END -> {
                 val samples = speechBuffer.size
-                Log.d(TAG, "SPEECH_END — segment=$samples samples (${samples / 16000f}s)")
-                drainBuffer()
+                Log.d(TAG, "SPEECH_END — segment=$samples samples (${samples / 16000f}s), continuous=$isContinuousMode")
+                if (isContinuousMode) {
+                    drainBuffer()
+                } else {
+                    // In PTT mode, keep utterance intact until user releases PTT (handleStop flushes)
+                    null
+                }
             }
         }
     }

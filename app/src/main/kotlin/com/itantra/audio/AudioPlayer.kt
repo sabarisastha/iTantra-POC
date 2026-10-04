@@ -1,9 +1,13 @@
 package com.itantra.audio
 
+import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -24,7 +28,9 @@ data class PcmChunk(
     val isEos: Boolean = false
 )
 
-class AudioPlayer {
+class AudioPlayer(
+    private val context: Context? = null
+) {
 
     @Volatile
     private var audioTrack: AudioTrack? = null
@@ -64,6 +70,79 @@ class AudioPlayer {
     private var isFloatEncoding = false
 
     private val lock = Any()
+
+    /**
+     * Ensures audio focus, audible volume check/boost, and phone loudspeaker routing.
+     */
+    fun configureSpeakerOutput(isAlert: Boolean = false) {
+        val ctx = context ?: return
+        try {
+            val am = ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+
+            // 1. Audio Focus
+            val usage = if (isAlert) AudioAttributes.USAGE_ALARM else AudioAttributes.USAGE_MEDIA
+            val contentType = if (isAlert) AudioAttributes.CONTENT_TYPE_SONIFICATION else AudioAttributes.CONTENT_TYPE_SPEECH
+            val streamType = if (isAlert) AudioManager.STREAM_ALARM else AudioManager.STREAM_MUSIC
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val focusReq = AudioFocusRequest.Builder(
+                    if (isAlert) AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE else AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+                ).setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(usage)
+                        .setContentType(contentType)
+                        .build()
+                ).build()
+                val focusResult = am.requestAudioFocus(focusReq)
+                Log.d(TAG, "[AUDIO] requestAudioFocus result=$focusResult")
+            } else {
+                @Suppress("DEPRECATION")
+                am.requestAudioFocus(
+                    null,
+                    streamType,
+                    if (isAlert) AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE else AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+                )
+            }
+
+            // 2. Volume check & safety boost for testing
+            val currentVol = am.getStreamVolume(streamType)
+            val maxVol = am.getStreamMaxVolume(streamType)
+            val isMute = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) am.isStreamMute(streamType) else (currentVol == 0)
+
+            Log.i(TAG, "[AUDIO] Volume check: stream=$streamType, current=$currentVol/$maxVol, muted=$isMute")
+            if (currentVol == 0 || isMute || currentVol < maxVol / 3) {
+                val safeVol = (maxVol * 0.85f).toInt().coerceAtLeast(1)
+                Log.w(TAG, "[AUDIO] Volume was low/muted ($currentVol/$maxVol) — boosting to $safeVol/$maxVol for audible playback")
+                am.setStreamVolume(streamType, safeVol, 0)
+            }
+
+            // 3. Force loudspeaker output
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val devices = am.availableCommunicationDevices
+                val speaker = devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                if (speaker != null) {
+                    val ok = am.setCommunicationDevice(speaker)
+                    Log.i(TAG, "[AUDIO] setCommunicationDevice(TYPE_BUILTIN_SPEAKER): $ok")
+                } else {
+                    @Suppress("DEPRECATION")
+                    am.isSpeakerphoneOn = true
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                am.isSpeakerphoneOn = true
+            }
+
+            val modeStr = when (am.mode) {
+                AudioManager.MODE_NORMAL -> "MODE_NORMAL"
+                AudioManager.MODE_IN_COMMUNICATION -> "MODE_IN_COMMUNICATION"
+                AudioManager.MODE_IN_CALL -> "MODE_IN_CALL"
+                else -> "MODE_${am.mode}"
+            }
+            Log.i(TAG, "[AUDIO] ROUTE: mode=$modeStr, speakerphone=${am.isSpeakerphoneOn}, streamVolume=${am.getStreamVolume(streamType)}/$maxVol")
+        } catch (e: Throwable) {
+            Log.w(TAG, "[AUDIO] configureSpeakerOutput error: ${e.message}")
+        }
+    }
 
     // -------------------------------------------------------------------------
     // PREWARM
@@ -135,6 +214,8 @@ class AudioPlayer {
         sampleRate: Int,
         isAlert: Boolean = false
     ): Boolean {
+
+        configureSpeakerOutput(isAlert)
 
         val targetUsage =
             if (isAlert) {
@@ -442,6 +523,8 @@ class AudioPlayer {
             return@withContext
         }
 
+        configureSpeakerOutput(isAlert)
+
         val targetUsage =
             if (isAlert) {
                 AudioAttributes.USAGE_ALARM
@@ -497,6 +580,10 @@ class AudioPlayer {
 
             ensureTrackPlaying(track)
 
+            val initialHead =
+                track.playbackHeadPosition
+                    .toLong() and 0xFFFFFFFFL
+
             val written =
                 if (isFloatEncoding) {
                     writeFloatsFully(
@@ -524,12 +611,8 @@ class AudioPlayer {
                 t6
             )
 
-            val startHead =
-                track.playbackHeadPosition
-                    .toLong() and 0xFFFFFFFFL
-
             val targetHead =
-                startHead + written.toLong()
+                initialHead + written.toLong()
 
             val timeout =
                 if (sampleRate > 0) {
@@ -632,6 +715,8 @@ class AudioPlayer {
     fun startStream(
         sampleRate: Int = 16000
     ): Boolean {
+
+        configureSpeakerOutput(false)
 
         stopInternal()
 
@@ -969,11 +1054,17 @@ class AudioPlayer {
                     return
                 }
 
-                /*
-                 * Write the initial buffered PCM FIRST.
-                 *
-                 * Then start AudioTrack once.
-                 */
+                ensureTrackPlaying(track)
+
+                playbackStarted = true
+
+                t5PlaybackStart =
+                    System.currentTimeMillis()
+
+                ttsInitialHeadPosition =
+                    track.playbackHeadPosition
+                        .toLong() and 0xFFFFFFFFL
+
                 while (pendingChunks.isNotEmpty()) {
 
                     val samples =
@@ -1015,30 +1106,12 @@ class AudioPlayer {
                     )
                 }
 
-                ensureTrackPlaying(track)
-
-                playbackStarted = true
-
-                t5PlaybackStart =
-                    System.currentTimeMillis()
-
-                ttsInitialHeadPosition =
-                    track.playbackHeadPosition
-                        .toLong() and 0xFFFFFFFFL
-
-                /*
-                 * ttsInitialHeadPosition is taken after the initial
-                 * writes, so for the final wait we track additional
-                 * playback from this point.
-                 *
-                 * Instead of depending on that value, finalTargetHead
-                 * below is calculated against the current relative head.
-                 */
                 Log.d(
                     TAG,
                     "[AUDIO] T5_PLAYBACK_STARTED " +
                             "at=$t5PlaybackStart " +
-                            "(in ${t5PlaybackStart - t0}ms)"
+                            "(in ${t5PlaybackStart - t0}ms) " +
+                            "initialHead=$ttsInitialHeadPosition"
                 )
             }
 
@@ -1077,8 +1150,7 @@ class AudioPlayer {
                 }
 
                 /*
-                 * Before playback starts:
-                 * hold a small look-ahead.
+                 * Start playback immediately on the first available chunk.
                  */
                 if (!playbackStarted) {
 
@@ -1101,13 +1173,7 @@ class AudioPlayer {
                                 "buffered=${bufferedMs}ms)"
                     )
 
-                    if (
-                        bufferedMs >=
-                        initialPrebufferMs ||
-                        pendingChunks.size >= 2
-                    ) {
-                        startPlaybackIfNeeded()
-                    }
+                    startPlaybackIfNeeded()
 
                     continue
                 }
@@ -1193,52 +1259,8 @@ class AudioPlayer {
 
             /*
              * Wait until ALL samples already written to AudioTrack
-             * have physically drained.
-             *
-             * We do NOT stop waiting just because playState changes.
+             * have physically drained through the speaker DAC.
              */
-            val finalStartHead =
-                track.playbackHeadPosition
-                    .toLong() and 0xFFFFFFFFL
-
-            /*
-             * At this point playback may already have consumed some
-             * samples. We therefore calculate remaining samples using:
-             *
-             * totalWrittenSamples - samplesAlreadyPlayedSinceStreamStart
-             *
-             * Since this stream starts after a flush, the simplest safe
-             * target is:
-             *
-             * final target = current relative head + remaining samples
-             *
-             * where the current head is measured now and remaining samples
-             * are estimated from the total samples written minus the
-             * samples physically consumed so far.
-             */
-            val currentHead =
-                track.playbackHeadPosition
-                    .toLong() and 0xFFFFFFFFL
-
-            /*
-             * For a newly flushed stream, AudioTrack head starts close
-             * to zero. Use final target based on total samples written.
-             */
-            val finalTargetHead =
-                maxOf(
-                    currentHead,
-                    totalWrittenSamples
-                )
-
-            Log.d(
-                TAG,
-                "[AUDIO] EOS WAIT START " +
-                        "totalChunks=$totalChunks " +
-                        "totalWrittenSamples=$totalWrittenSamples " +
-                        "currentHead=$currentHead " +
-                        "targetHead=$finalTargetHead"
-            )
-
             val waitStart =
                 System.currentTimeMillis()
 
@@ -1252,6 +1274,15 @@ class AudioPlayer {
                     8000L
                 }
 
+            Log.d(
+                TAG,
+                "[AUDIO] EOS WAIT START " +
+                        "totalChunks=$totalChunks " +
+                        "totalWrittenSamples=$totalWrittenSamples " +
+                        "initialHead=$ttsInitialHeadPosition " +
+                        "maxWaitMs=$maxWaitMs"
+            )
+
             while (
                 isPlaying &&
                 isTtsStreamActive
@@ -1261,15 +1292,23 @@ class AudioPlayer {
                     track.playbackHeadPosition
                         .toLong() and 0xFFFFFFFFL
 
-                if (head >= finalTargetHead) {
+                val playedSamples =
+                    (head - ttsInitialHeadPosition) and 0xFFFFFFFFL
+
+                if (playedSamples >= totalWrittenSamples) {
+                    Log.d(
+                        TAG,
+                        "[AUDIO] EOS WAIT COMPLETE: " +
+                                "playedSamples=$playedSamples " +
+                                "totalWrittenSamples=$totalWrittenSamples " +
+                                "in ${System.currentTimeMillis() - waitStart}ms"
+                    )
                     break
                 }
 
                 /*
                  * If an underrun causes PLAYSTATE to leave PLAYING,
                  * resume playback while samples still remain.
-                 *
-                 * This is NOT considered end-of-stream.
                  */
                 if (
                     track.playState !=
@@ -1287,8 +1326,10 @@ class AudioPlayer {
                     Log.e(
                         TAG,
                         "[AUDIO][ERROR] EOS wait timeout " +
+                                "playedSamples=$playedSamples " +
+                                "totalWrittenSamples=$totalWrittenSamples " +
                                 "head=$head " +
-                                "target=$finalTargetHead"
+                                "initialHead=$ttsInitialHeadPosition"
                     )
 
                     break
@@ -1604,6 +1645,10 @@ class AudioPlayer {
                 AudioTrack.PLAYSTATE_PLAYING
             ) {
                 track.play()
+                Log.d(
+                    TAG,
+                    "[AUDIO] AudioTrack.play() called, state=${track.state}, playState=${track.playState}"
+                )
             }
 
         } catch (e: Throwable) {
