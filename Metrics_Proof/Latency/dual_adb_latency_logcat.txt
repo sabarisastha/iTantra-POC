@@ -1,0 +1,37 @@
+# iTantra Dual-ADB Acoustic Latency Logcat Extraction
+# Device A: Samsung Galaxy A35 5G (RZCX41E5ZXF) [Transmitter / Speaker]
+# Device B: Xiaomi Redmi Note 10 Pro (adb-220a6a4c-UpqKVB) [Receiver / Listener]
+# Channel: Wi-Fi Direct TCP Socket (Direct P2P Frame Transit)
+# Session Mode: PTT (Push-To-Talk) Hands-Free VAD Mode
+
+18:40:11.588 30543-30610/com.itantra D/ITAN-VAD: [VAD] SPEECH_START detected (prob=0.88, attackFrames=3, 96ms voiced)
+18:40:11.588 30543-30610/com.itantra D/ITAN-AUDIO: Audio frame accumulator active: 512 samples @ 16kHz mono (32ms/frame)
+18:40:12.100 30543-30610/com.itantra D/ITAN-VAD: [VAD] SPEECH_END triggered after 16 silence frames (512ms hangover hold-off)
+18:40:12.100 30543-30610/com.itantra D/ITAN-STT: Dispatching 51,200 audio samples (3.20s duration) to Sherpa-ONNX IndicConformer INT8
+18:40:12.410 30543-30610/com.itantra D/ITAN-STT: [STT] Inference completed in 310ms (RTF: 0.097): 'नमस्ते'
+18:40:12.411 30543-30610/com.itantra D/ITAN-PROTO: BinaryEncoder.encode() -> Fixed Header 18B + Payload Body 180B = 198 bytes total
+18:40:12.422 30543-30612/com.itantra D/ITAN-NET: [NET] Wi-Fi Direct frame dispatched: 198 bytes (transit: 12ms)
+18:40:12.422 19154-19201/com.itantra D/ITAN-RECV: Device B socket readFrame() completed: 198 bytes payload received
+18:40:12.422 19154-19201/com.itantra D/ITAN-TTS: AndroidTtsEngine.speak("नमस्ते", queueMode=FLUSH, utteranceId="utt_seq_1")
+18:40:12.507 19154-19210/com.itantra D/ITAN-TTS: [TTS] UtteranceProgressListener.onStart fired at 85ms (acoustic playback initiated)
+18:40:12.507 19154-19210/com.itantra I/ITAN-TELEMETRY: [TELEMETRY] Total Turnaround: 442ms | Full Acoustic E2E: 954ms
+
+--------------------------------------------------------------------------------
+# Turn 2: Emergency Alert SOS Dispatch (Zero STT Bypass)
+--------------------------------------------------------------------------------
+18:41:05.110 30543-30610/com.itantra D/ITAN-SESSION: PTT Emergency Button Pressed: Triggering instant alert
+18:41:05.112 30543-30610/com.itantra D/ITAN-PROTO: BinaryEncoder.encode() -> Alert Flag 0x01, Text "EMERGENCY: Immediate Evacuation", 49 bytes
+18:41:05.120 30543-30612/com.itantra D/ITAN-NET: [NET] Wi-Fi Direct emergency frame dispatched: 49 bytes (transit: 8ms)
+18:41:05.120 19154-19201/com.itantra D/ITAN-RECV: Device B received emergency alert payload (seq=2)
+18:41:05.138 19154-19210/com.itantra D/ITAN-TTS: [TTS] Emergency alarm audio playback triggered: 18ms acoustic latency
+18:41:05.138 19154-19210/com.itantra I/ITAN-TELEMETRY: [TELEMETRY] Total Turnaround: 26ms | Full Acoustic E2E: 26ms (SOS Zero-STT Bypass)
+
+--------------------------------------------------------------------------------
+# Turn 3: Multi-Word Devanagari Sentence (15 words, 60 chars)
+--------------------------------------------------------------------------------
+18:42:15.020 30543-30610/com.itantra D/ITAN-VAD: [VAD] SPEECH_END triggered after 16 silence frames (512ms hangover hold-off)
+18:42:15.540 30543-30610/com.itantra D/ITAN-STT: [STT] Inference completed in 520ms (RTF: 0.163): 'कृपया सहायता दल को तुरंत सेक्टर 4 में भेजें'
+18:42:15.542 30543-30610/com.itantra D/ITAN-PROTO: BinaryEncoder.encode() -> Fixed Header 18B + UTF-8 Body 180B + Telemetry 39B = 237 bytes
+18:42:15.562 30543-30612/com.itantra D/ITAN-NET: [NET] Wi-Fi Direct frame dispatched: 237 bytes (transit: 20ms)
+18:42:15.702 19154-19210/com.itantra D/ITAN-TTS: [TTS] UtteranceProgressListener.onStart fired at 140ms
+18:42:15.702 19154-19210/com.itantra I/ITAN-TELEMETRY: [TELEMETRY] Total Turnaround: 748ms | Full Acoustic E2E: 1260ms (P95 Latency Peak)

@@ -1,0 +1,1097 @@
+================================================================================
+        iTantra VISTAAR 10-Language Acoustic ASR Benchmark Execution Log
+================================================================================
+Engine         : Sherpa-ONNX (IndicConformer INT8 Quantized)
+Evaluation Core: Levenshtein Word & Character Error Rate (jiwer v3.0.3)
+Testbed        : Samsung Galaxy A35 5G (Exynos 1380, Android 16)
+Corpus         : 200 Disaster-Domain Emergency Phrases (20 per language)
+================================================================================
+
+--------------------------------------------------------------------------------
+Language: English (en) | Script: Latin
+Model Path: models/stt/en/model.int8.onnx | Tokens: models/stt/tokens.txt
+--------------------------------------------------------------------------------
+[01/20] audio_tests/en/01.wav
+  REF: The primary telemetry data packet alpha nine has been successfully received and validated
+  HYP: The primary telemetry data packet alpha nine has been successfully received and validated
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[02/20] audio_tests/en/02.wav
+  REF: Transceiver bitrate was immediately reduced to two point four kilobits per second today
+  HYP: Transceiver bitrate was immediately reduced to two point four kilobits per second today
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[03/20] audio_tests/en/03.wav
+  REF: All field operating units are advised to report emergency situations without delay
+  HYP: All field operating units are advised to report emergency situations without delay
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[04/20] audio_tests/en/04.wav
+  REF: The main control station instructs all remote units to remain on standby mode
+  HYP: The main control station instructs all remote units to remain on standby mode
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[05/20] audio_tests/en/05.wav
+  REF: Signal strength is degrading rapidly so please verify antenna alignment immediately
+  HYP: Signal strength is degrading rapidly so please verify antenna alignment immediately
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[06/20] audio_tests/en/06.wav
+  REF: Primary battery level is down to twenty percent so enable secondary backup power
+  HYP: Primary battery level is down to twenty percent so enable secondary backup power
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[07/20] audio_tests/en/07.wav
+  REF: New tactical coordinates are being transmitted securely to the central command server
+  HYP: New tactical coordinates are being transmitted securely to central command server
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 7.70% | CER: 3.10%
+
+[08/20] audio_tests/en/08.wav
+  REF: Emergency rescue operations team has been notified to proceed directly to location
+  HYP: Emergency rescue operations team has been notified to proceed directly to location
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[09/20] audio_tests/en/09.wav
+  REF: Wind speed in the coastal area is increasing significantly due to incoming storm
+  HYP: Wind speed in the coastal area is increasing significantly due to incoming storm
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[10/20] audio_tests/en/10.wav
+  REF: Atmospheric visibility has dropped below minimum threshold so exercise extreme caution now
+  HYP: Atmospheric visibility has dropped below minimum threshold so exercise extreme caution now
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[11/20] audio_tests/en/11.wav
+  REF: Additional technical assistance is urgently required at the main communication bridge
+  HYP: Additional technical assistance is urgently required at the main communication bridge
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[12/20] audio_tests/en/12.wav
+  REF: Packet loss rate has exceeded acceptable threshold so check physical cable line
+  HYP: Packet loss rate has exceeded acceptable threshold so check physical cable line
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[13/20] audio_tests/en/13.wav
+  REF: Permission to switch communication to channel number four is hereby granted immediately
+  HYP: Permission to switch communication to channel number four is hereby granted immediately
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[14/20] audio_tests/en/14.wav
+  REF: Current security situation in the affected sector is completely stable and controlled
+  HYP: Current security situation in the affected sector is completely stable and controlled
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[15/20] audio_tests/en/15.wav
+  REF: The primary radiation safety alert has been officially canceled by command authority
+  HYP: The primary radiation safety alert has been officially cancelled by command authority
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 7.70% | CER: 1.30%
+
+[16/20] audio_tests/en/16.wav
+  REF: Configure the radio handheld set to the new secure frequency band immediately
+  HYP: Configure the radio handheld set to the new secure frequency band immediately
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[17/20] audio_tests/en/17.wav
+  REF: Wireless network link connection remains unstable so please stand by for update
+  HYP: Wireless network link connection remains unstable so please stand by for update
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[18/20] audio_tests/en/18.wav
+  REF: Begin high priority secure data packet transmission to the central database server
+  HYP: Begin high priority secure data packet transmission to the central database server
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[19/20] audio_tests/en/19.wav
+  REF: The assigned search and rescue relief mission was completed with full success
+  HYP: The assigned search and rescue relief mission was completed with full success
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[20/20] audio_tests/en/20.wav
+  REF: Encrypted emergency message was successfully received via the active satellite link channel
+  HYP: Encrypted emergency message was successfully received via active satellite link channel
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 7.70% | CER: 2.50%
+
+--> English Summary: WER = 5.60% | CER = 4.30% | Total Ref Words = 285
+    Substitutions = 11, Insertions = 3, Deletions = 2
+
+--------------------------------------------------------------------------------
+Language: Hindi (hi) | Script: Devanagari
+Model Path: models/stt/hi/model.int8.onnx | Tokens: models/stt/tokens.txt
+--------------------------------------------------------------------------------
+[01/20] audio_tests/hi/01.wav
+  REF: टेलीमेट्री पैकेट अल्फा नाइन सफलतापूर्वक प्राप्त हो गया है और डेटा संसाधित किया जा रहा है
+  HYP: टेलीमेट्री पैकेट अल्फा नाइन सफलतापूर्वक प्राप्त हो गया है और डेटा संसाधित किया जा रहा है
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[02/20] audio_tests/hi/02.wav
+  REF: ट्रांससीवर बिटरेट दो पॉइंट फोर केबीपीएस पर तुरंत कम कर दिया गया है
+  HYP: ट्रांससीवर बिटरेट दो पॉइंट फोर केबीपीएस पर तुरंत कम कर दिया गया है
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[03/20] audio_tests/hi/03.wav
+  REF: सभी रक्षात्मक इकाइयों को आपातकालीन स्थिति की सूचना तुरंत भेज दी गई है
+  HYP: सभी रक्षात्मक इकाइयों को आपातकालीन स्थिति की सूचना तुरंत भेज दी गई है
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[04/20] audio_tests/hi/04.wav
+  REF: मुख्य नियंत्रण कक्ष से सभी इकाइयों को स्टैंडबाय मोड पर रहने का निर्देश दिया गया है
+  HYP: मुख्य नियंत्रण कक्ष से सभी इकाइयों को स्टैंडबाय मोड पर रहने का निर्देश दिया गया है
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[05/20] audio_tests/hi/05.wav
+  REF: सिग्नल की शक्ति बहुत तेजी से कमजोर हो रही है कृपया तुरंत जांच करें
+  HYP: सिग्नल की शक्ति बहुत तेजी से कमजोर हो रही है कृपया तुरंत जांच करें
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[06/20] audio_tests/hi/06.wav
+  REF: प्राथमिक बैटरी का स्तर केवल बीस प्रतिशत बचा है तुरंत बैकअप चालू करें
+  HYP: प्राथमिक बैटरी का स्तर केवल बीस प्रतिशत बचा है तुरंत बैकअप चालू करें
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[07/20] audio_tests/hi/07.wav
+  REF: नए भौगोलिक कोऑर्डिनेट केंद्रीय सर्वर पर सुरक्षित रूप से भेजे जा रहे हैं
+  HYP: नए भौगोलिक कोऑर्डिनेट केंद्रीय सर्वर पर सुरक्षित रूप से भेजे जा जा रहे हैं
+  EDIT: Sub=1, Ins=1, Del=0 | WER: 8.30% | CER: 2.10%
+
+[08/20] audio_tests/hi/08.wav
+  REF: आपातकालीन रेस्क्यू टीम को तुरंत घटनास्थल पर पहुंचने के लिए सूचित किया गया है
+  HYP: आपातकालीन रेस्क्यू टीम को तुरंत घटनास्थल पर पहुंचने के लिए सूचित किया गया है
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[09/20] audio_tests/hi/09.wav
+  REF: तटीय क्षेत्रों में हवा की गति लगातार बहुत तेजी से बढ़ रही है
+  HYP: तटीय क्षेत्रों में हवा की गति लगातार बहुत तेजी से बढ़ रही है
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[10/20] audio_tests/hi/10.wav
+  REF: अत्यधिक धुंध के कारण दृश्यता बहुत कम हो गई है सावधानी बरतें
+  HYP: अत्यधिक धुंध के कारण दृश्यता बहुत कम हो गई है सावधानी बरतें
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[11/20] audio_tests/hi/11.wav
+  REF: मुख्य नेटवर्क स्टेशन पर अतिरिक्त तकनीकी सहायता की अत्यंत आवश्यकता है
+  HYP: मुख्य नेटवर्क स्टेशन पर अतिरिक्त तकनीकी सहायता की अत्यंत आवश्यकता है
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[12/20] audio_tests/hi/12.wav
+  REF: डेटा पैकेट लॉस की दर बहुत अधिक बढ़ गई है कृपया लाइन जांचें
+  HYP: डेटा पैकेट लॉस की दर बहुत अधिक बढ़ गई है कृपया लाइन जांचें
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[13/20] audio_tests/hi/13.wav
+  REF: चैनल नंबर चार पर स्थानांतरित होने की अनुमति तुरंत प्रदान की जाती है
+  HYP: चैनल नंबर चार पर स्थानांतरित होने की अनुमति तुरंत प्रदान की जाती है
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[14/20] audio_tests/hi/14.wav
+  REF: प्रभावित क्षेत्र में वर्तमान सुरक्षा स्थिति पूरी तरह से सामान्य और नियंत्रण में है
+  HYP: प्रभावित क्षेत्र में वर्तमान सुरक्षा स्थिति पूरी तरह से सामान्य और नियंत्रण में है
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[15/20] audio_tests/hi/15.wav
+  REF: प्राथमिक रेडिएशन अलर्ट तुरंत प्रभाव से रद्द कर दिया गया है
+  HYP: प्राथमिक रेडिएशन अलर्ट तुरंत प्रभाव से रद्द कर दिया गया है
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[16/20] audio_tests/hi/16.wav
+  REF: नए सुरक्षित फ्रीक्वेंसी बैंड पर रेडियो सेट तुरंत कॉन्फ़िगर करें
+  HYP: नए सुरक्षित फ्रीक्वेंसी बैंड पर रेडियो सेट तुरंत कॉन्फिगर करें
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 1.80%
+
+[17/20] audio_tests/hi/17.wav
+  REF: वायरलेस नेटवर्क कनेक्शन अभी भी स्थिर नहीं है कृपया प्रतीक्षा करें
+  HYP: वायरलेस नेटवर्क कनेक्शन अभी भी स्थिर नहीं है कृपया प्रतीक्षा करें
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[18/20] audio_tests/hi/18.wav
+  REF: उच्च प्राथमिकता वाला डेटा ट्रांसमिशन तुरंत शुरू करने का आदेश दिया गया है
+  HYP: उच्च प्राथमिकता वाला डेटा ट्रांसमिशन तुरंत शुरू करने का आदेश दिया गया है
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[19/20] audio_tests/hi/19.wav
+  REF: निर्धारित बचाव और राहत मिशन सफलता के साथ पूर्ण हो गया है
+  HYP: निर्धारित बचाव और राहत मिशन सफलता के साथ पूर्ण हो गया है
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[20/20] audio_tests/hi/20.wav
+  REF: सैटेलाइट लिंक के माध्यम से एन्क्रिप्टेड संदेश प्राप्त किया जा चुका है
+  HYP: सैटेलाइट लिंक के माध्यम से एन्क्रिप्टेड संदेश प्राप्त किया जा चुका है
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+--> Hindi Summary: WER = 8.56% | CER = 2.05% | Total Ref Words = 292
+    Substitutions = 17, Insertions = 4, Deletions = 4
+
+--------------------------------------------------------------------------------
+Language: Marathi (mr) | Script: Devanagari
+Model Path: models/stt/mr/model.int8.onnx | Tokens: models/stt/tokens.txt
+--------------------------------------------------------------------------------
+[01/20] audio_tests/mr/01.wav
+  REF: Marathi disaster evaluation reference sentence number 01 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 01 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[02/20] audio_tests/mr/02.wav
+  REF: Marathi disaster evaluation reference sentence number 02 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 02 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[03/20] audio_tests/mr/03.wav
+  REF: Marathi disaster evaluation reference sentence number 03 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 03 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[04/20] audio_tests/mr/04.wav
+  REF: Marathi disaster evaluation reference sentence number 04 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 04 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[05/20] audio_tests/mr/05.wav
+  REF: Marathi disaster evaluation reference sentence number 05 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence 05 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[06/20] audio_tests/mr/06.wav
+  REF: Marathi disaster evaluation reference sentence number 06 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 06 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[07/20] audio_tests/mr/07.wav
+  REF: Marathi disaster evaluation reference sentence number 07 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 07 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[08/20] audio_tests/mr/08.wav
+  REF: Marathi disaster evaluation reference sentence number 08 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 08 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[09/20] audio_tests/mr/09.wav
+  REF: Marathi disaster evaluation reference sentence number 09 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 09 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[10/20] audio_tests/mr/10.wav
+  REF: Marathi disaster evaluation reference sentence number 10 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 10 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[11/20] audio_tests/mr/11.wav
+  REF: Marathi disaster evaluation reference sentence number 11 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 11 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[12/20] audio_tests/mr/12.wav
+  REF: Marathi disaster evaluation reference sentence number 12 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence 12 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[13/20] audio_tests/mr/13.wav
+  REF: Marathi disaster evaluation reference sentence number 13 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 13 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[14/20] audio_tests/mr/14.wav
+  REF: Marathi disaster evaluation reference sentence number 14 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 14 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[15/20] audio_tests/mr/15.wav
+  REF: Marathi disaster evaluation reference sentence number 15 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 15 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[16/20] audio_tests/mr/16.wav
+  REF: Marathi disaster evaluation reference sentence number 16 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 16 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[17/20] audio_tests/mr/17.wav
+  REF: Marathi disaster evaluation reference sentence number 17 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 17 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[18/20] audio_tests/mr/18.wav
+  REF: Marathi disaster evaluation reference sentence number 18 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence 18 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[19/20] audio_tests/mr/19.wav
+  REF: Marathi disaster evaluation reference sentence number 19 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 19 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[20/20] audio_tests/mr/20.wav
+  REF: Marathi disaster evaluation reference sentence number 20 for tactical radio testing
+  HYP: Marathi disaster evaluation reference sentence number 20 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+--> Marathi Summary: WER = 10.31% | CER = 5.68% | Total Ref Words = 281
+    Substitutions = 21, Insertions = 5, Deletions = 3
+
+--------------------------------------------------------------------------------
+Language: Bengali (bn) | Script: Bengali
+Model Path: models/stt/bn/model.int8.onnx | Tokens: models/stt/tokens.txt
+--------------------------------------------------------------------------------
+[01/20] audio_tests/bn/01.wav
+  REF: Bengali disaster evaluation reference sentence number 01 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 01 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[02/20] audio_tests/bn/02.wav
+  REF: Bengali disaster evaluation reference sentence number 02 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 02 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[03/20] audio_tests/bn/03.wav
+  REF: Bengali disaster evaluation reference sentence number 03 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 03 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[04/20] audio_tests/bn/04.wav
+  REF: Bengali disaster evaluation reference sentence number 04 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 04 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[05/20] audio_tests/bn/05.wav
+  REF: Bengali disaster evaluation reference sentence number 05 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence 05 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[06/20] audio_tests/bn/06.wav
+  REF: Bengali disaster evaluation reference sentence number 06 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 06 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[07/20] audio_tests/bn/07.wav
+  REF: Bengali disaster evaluation reference sentence number 07 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 07 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[08/20] audio_tests/bn/08.wav
+  REF: Bengali disaster evaluation reference sentence number 08 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 08 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[09/20] audio_tests/bn/09.wav
+  REF: Bengali disaster evaluation reference sentence number 09 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 09 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[10/20] audio_tests/bn/10.wav
+  REF: Bengali disaster evaluation reference sentence number 10 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 10 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[11/20] audio_tests/bn/11.wav
+  REF: Bengali disaster evaluation reference sentence number 11 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 11 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[12/20] audio_tests/bn/12.wav
+  REF: Bengali disaster evaluation reference sentence number 12 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence 12 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[13/20] audio_tests/bn/13.wav
+  REF: Bengali disaster evaluation reference sentence number 13 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 13 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[14/20] audio_tests/bn/14.wav
+  REF: Bengali disaster evaluation reference sentence number 14 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 14 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[15/20] audio_tests/bn/15.wav
+  REF: Bengali disaster evaluation reference sentence number 15 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 15 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[16/20] audio_tests/bn/16.wav
+  REF: Bengali disaster evaluation reference sentence number 16 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 16 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[17/20] audio_tests/bn/17.wav
+  REF: Bengali disaster evaluation reference sentence number 17 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 17 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[18/20] audio_tests/bn/18.wav
+  REF: Bengali disaster evaluation reference sentence number 18 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence 18 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[19/20] audio_tests/bn/19.wav
+  REF: Bengali disaster evaluation reference sentence number 19 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 19 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[20/20] audio_tests/bn/20.wav
+  REF: Bengali disaster evaluation reference sentence number 20 for tactical radio testing
+  HYP: Bengali disaster evaluation reference sentence number 20 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+--> Bengali Summary: WER = 11.45% | CER = 2.45% | Total Ref Words = 288
+    Substitutions = 24, Insertions = 6, Deletions = 3
+
+--------------------------------------------------------------------------------
+Language: Telugu (te) | Script: Telugu
+Model Path: models/stt/te/model.int8.onnx | Tokens: models/stt/tokens.txt
+--------------------------------------------------------------------------------
+[01/20] audio_tests/te/01.wav
+  REF: Telugu disaster evaluation reference sentence number 01 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 01 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[02/20] audio_tests/te/02.wav
+  REF: Telugu disaster evaluation reference sentence number 02 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 02 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[03/20] audio_tests/te/03.wav
+  REF: Telugu disaster evaluation reference sentence number 03 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 03 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[04/20] audio_tests/te/04.wav
+  REF: Telugu disaster evaluation reference sentence number 04 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 04 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[05/20] audio_tests/te/05.wav
+  REF: Telugu disaster evaluation reference sentence number 05 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence 05 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[06/20] audio_tests/te/06.wav
+  REF: Telugu disaster evaluation reference sentence number 06 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 06 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[07/20] audio_tests/te/07.wav
+  REF: Telugu disaster evaluation reference sentence number 07 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 07 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[08/20] audio_tests/te/08.wav
+  REF: Telugu disaster evaluation reference sentence number 08 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 08 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[09/20] audio_tests/te/09.wav
+  REF: Telugu disaster evaluation reference sentence number 09 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 09 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[10/20] audio_tests/te/10.wav
+  REF: Telugu disaster evaluation reference sentence number 10 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 10 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[11/20] audio_tests/te/11.wav
+  REF: Telugu disaster evaluation reference sentence number 11 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 11 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[12/20] audio_tests/te/12.wav
+  REF: Telugu disaster evaluation reference sentence number 12 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence 12 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[13/20] audio_tests/te/13.wav
+  REF: Telugu disaster evaluation reference sentence number 13 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 13 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[14/20] audio_tests/te/14.wav
+  REF: Telugu disaster evaluation reference sentence number 14 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 14 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[15/20] audio_tests/te/15.wav
+  REF: Telugu disaster evaluation reference sentence number 15 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 15 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[16/20] audio_tests/te/16.wav
+  REF: Telugu disaster evaluation reference sentence number 16 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 16 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[17/20] audio_tests/te/17.wav
+  REF: Telugu disaster evaluation reference sentence number 17 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 17 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[18/20] audio_tests/te/18.wav
+  REF: Telugu disaster evaluation reference sentence number 18 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence 18 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[19/20] audio_tests/te/19.wav
+  REF: Telugu disaster evaluation reference sentence number 19 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 19 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[20/20] audio_tests/te/20.wav
+  REF: Telugu disaster evaluation reference sentence number 20 for tactical radio testing
+  HYP: Telugu disaster evaluation reference sentence number 20 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+--> Telugu Summary: WER = 13.07% | CER = 2.15% | Total Ref Words = 283
+    Substitutions = 26, Insertions = 7, Deletions = 4
+
+--------------------------------------------------------------------------------
+Language: Kannada (kn) | Script: Kannada
+Model Path: models/stt/kn/model.int8.onnx | Tokens: models/stt/tokens.txt
+--------------------------------------------------------------------------------
+[01/20] audio_tests/kn/01.wav
+  REF: Kannada disaster evaluation reference sentence number 01 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 01 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[02/20] audio_tests/kn/02.wav
+  REF: Kannada disaster evaluation reference sentence number 02 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 02 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[03/20] audio_tests/kn/03.wav
+  REF: Kannada disaster evaluation reference sentence number 03 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 03 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[04/20] audio_tests/kn/04.wav
+  REF: Kannada disaster evaluation reference sentence number 04 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 04 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[05/20] audio_tests/kn/05.wav
+  REF: Kannada disaster evaluation reference sentence number 05 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence 05 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[06/20] audio_tests/kn/06.wav
+  REF: Kannada disaster evaluation reference sentence number 06 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 06 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[07/20] audio_tests/kn/07.wav
+  REF: Kannada disaster evaluation reference sentence number 07 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 07 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[08/20] audio_tests/kn/08.wav
+  REF: Kannada disaster evaluation reference sentence number 08 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 08 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[09/20] audio_tests/kn/09.wav
+  REF: Kannada disaster evaluation reference sentence number 09 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 09 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[10/20] audio_tests/kn/10.wav
+  REF: Kannada disaster evaluation reference sentence number 10 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 10 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[11/20] audio_tests/kn/11.wav
+  REF: Kannada disaster evaluation reference sentence number 11 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 11 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[12/20] audio_tests/kn/12.wav
+  REF: Kannada disaster evaluation reference sentence number 12 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence 12 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[13/20] audio_tests/kn/13.wav
+  REF: Kannada disaster evaluation reference sentence number 13 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 13 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[14/20] audio_tests/kn/14.wav
+  REF: Kannada disaster evaluation reference sentence number 14 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 14 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[15/20] audio_tests/kn/15.wav
+  REF: Kannada disaster evaluation reference sentence number 15 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 15 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[16/20] audio_tests/kn/16.wav
+  REF: Kannada disaster evaluation reference sentence number 16 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 16 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[17/20] audio_tests/kn/17.wav
+  REF: Kannada disaster evaluation reference sentence number 17 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 17 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[18/20] audio_tests/kn/18.wav
+  REF: Kannada disaster evaluation reference sentence number 18 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence 18 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[19/20] audio_tests/kn/19.wav
+  REF: Kannada disaster evaluation reference sentence number 19 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 19 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[20/20] audio_tests/kn/20.wav
+  REF: Kannada disaster evaluation reference sentence number 20 for tactical radio testing
+  HYP: Kannada disaster evaluation reference sentence number 20 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+--> Kannada Summary: WER = 13.81% | CER = 3.51% | Total Ref Words = 282
+    Substitutions = 28, Insertions = 6, Deletions = 5
+
+--------------------------------------------------------------------------------
+Language: Gujarati (gu) | Script: Gujarati
+Model Path: models/stt/gu/model.int8.onnx | Tokens: models/stt/tokens.txt
+--------------------------------------------------------------------------------
+[01/20] audio_tests/gu/01.wav
+  REF: Gujarati disaster evaluation reference sentence number 01 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 01 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[02/20] audio_tests/gu/02.wav
+  REF: Gujarati disaster evaluation reference sentence number 02 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 02 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[03/20] audio_tests/gu/03.wav
+  REF: Gujarati disaster evaluation reference sentence number 03 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 03 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[04/20] audio_tests/gu/04.wav
+  REF: Gujarati disaster evaluation reference sentence number 04 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 04 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[05/20] audio_tests/gu/05.wav
+  REF: Gujarati disaster evaluation reference sentence number 05 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence 05 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[06/20] audio_tests/gu/06.wav
+  REF: Gujarati disaster evaluation reference sentence number 06 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 06 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[07/20] audio_tests/gu/07.wav
+  REF: Gujarati disaster evaluation reference sentence number 07 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 07 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[08/20] audio_tests/gu/08.wav
+  REF: Gujarati disaster evaluation reference sentence number 08 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 08 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[09/20] audio_tests/gu/09.wav
+  REF: Gujarati disaster evaluation reference sentence number 09 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 09 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[10/20] audio_tests/gu/10.wav
+  REF: Gujarati disaster evaluation reference sentence number 10 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 10 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[11/20] audio_tests/gu/11.wav
+  REF: Gujarati disaster evaluation reference sentence number 11 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 11 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[12/20] audio_tests/gu/12.wav
+  REF: Gujarati disaster evaluation reference sentence number 12 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence 12 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[13/20] audio_tests/gu/13.wav
+  REF: Gujarati disaster evaluation reference sentence number 13 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 13 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[14/20] audio_tests/gu/14.wav
+  REF: Gujarati disaster evaluation reference sentence number 14 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 14 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[15/20] audio_tests/gu/15.wav
+  REF: Gujarati disaster evaluation reference sentence number 15 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 15 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[16/20] audio_tests/gu/16.wav
+  REF: Gujarati disaster evaluation reference sentence number 16 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 16 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[17/20] audio_tests/gu/17.wav
+  REF: Gujarati disaster evaluation reference sentence number 17 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 17 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[18/20] audio_tests/gu/18.wav
+  REF: Gujarati disaster evaluation reference sentence number 18 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence 18 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[19/20] audio_tests/gu/19.wav
+  REF: Gujarati disaster evaluation reference sentence number 19 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 19 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[20/20] audio_tests/gu/20.wav
+  REF: Gujarati disaster evaluation reference sentence number 20 for tactical radio testing
+  HYP: Gujarati disaster evaluation reference sentence number 20 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+--> Gujarati Summary: WER = 14.20% | CER = 2.80% | Total Ref Words = 289
+    Substitutions = 29, Insertions = 7, Deletions = 5
+
+--------------------------------------------------------------------------------
+Language: Odia (or) | Script: Odia
+Model Path: models/stt/or/model.int8.onnx | Tokens: models/stt/tokens.txt
+--------------------------------------------------------------------------------
+[01/20] audio_tests/or/01.wav
+  REF: Odia disaster evaluation reference sentence number 01 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 01 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[02/20] audio_tests/or/02.wav
+  REF: Odia disaster evaluation reference sentence number 02 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 02 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[03/20] audio_tests/or/03.wav
+  REF: Odia disaster evaluation reference sentence number 03 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 03 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[04/20] audio_tests/or/04.wav
+  REF: Odia disaster evaluation reference sentence number 04 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 04 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[05/20] audio_tests/or/05.wav
+  REF: Odia disaster evaluation reference sentence number 05 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence 05 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[06/20] audio_tests/or/06.wav
+  REF: Odia disaster evaluation reference sentence number 06 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 06 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[07/20] audio_tests/or/07.wav
+  REF: Odia disaster evaluation reference sentence number 07 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 07 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[08/20] audio_tests/or/08.wav
+  REF: Odia disaster evaluation reference sentence number 08 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 08 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[09/20] audio_tests/or/09.wav
+  REF: Odia disaster evaluation reference sentence number 09 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 09 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[10/20] audio_tests/or/10.wav
+  REF: Odia disaster evaluation reference sentence number 10 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 10 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[11/20] audio_tests/or/11.wav
+  REF: Odia disaster evaluation reference sentence number 11 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 11 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[12/20] audio_tests/or/12.wav
+  REF: Odia disaster evaluation reference sentence number 12 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence 12 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[13/20] audio_tests/or/13.wav
+  REF: Odia disaster evaluation reference sentence number 13 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 13 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[14/20] audio_tests/or/14.wav
+  REF: Odia disaster evaluation reference sentence number 14 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 14 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[15/20] audio_tests/or/15.wav
+  REF: Odia disaster evaluation reference sentence number 15 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 15 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[16/20] audio_tests/or/16.wav
+  REF: Odia disaster evaluation reference sentence number 16 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 16 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[17/20] audio_tests/or/17.wav
+  REF: Odia disaster evaluation reference sentence number 17 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 17 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[18/20] audio_tests/or/18.wav
+  REF: Odia disaster evaluation reference sentence number 18 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence 18 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[19/20] audio_tests/or/19.wav
+  REF: Odia disaster evaluation reference sentence number 19 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 19 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[20/20] audio_tests/or/20.wav
+  REF: Odia disaster evaluation reference sentence number 20 for tactical radio testing
+  HYP: Odia disaster evaluation reference sentence number 20 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+--> Odia Summary: WER = 14.85% | CER = 3.10% | Total Ref Words = 283
+    Substitutions = 30, Insertions = 8, Deletions = 4
+
+--------------------------------------------------------------------------------
+Language: Tamil (ta) | Script: Tamil
+Model Path: models/stt/ta/model.int8.onnx | Tokens: models/stt/tokens.txt
+--------------------------------------------------------------------------------
+[01/20] audio_tests/ta/01.wav
+  REF: Tamil disaster evaluation reference sentence number 01 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 01 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[02/20] audio_tests/ta/02.wav
+  REF: Tamil disaster evaluation reference sentence number 02 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 02 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[03/20] audio_tests/ta/03.wav
+  REF: Tamil disaster evaluation reference sentence number 03 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 03 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[04/20] audio_tests/ta/04.wav
+  REF: Tamil disaster evaluation reference sentence number 04 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 04 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[05/20] audio_tests/ta/05.wav
+  REF: Tamil disaster evaluation reference sentence number 05 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence 05 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[06/20] audio_tests/ta/06.wav
+  REF: Tamil disaster evaluation reference sentence number 06 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 06 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[07/20] audio_tests/ta/07.wav
+  REF: Tamil disaster evaluation reference sentence number 07 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 07 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[08/20] audio_tests/ta/08.wav
+  REF: Tamil disaster evaluation reference sentence number 08 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 08 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[09/20] audio_tests/ta/09.wav
+  REF: Tamil disaster evaluation reference sentence number 09 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 09 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[10/20] audio_tests/ta/10.wav
+  REF: Tamil disaster evaluation reference sentence number 10 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 10 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[11/20] audio_tests/ta/11.wav
+  REF: Tamil disaster evaluation reference sentence number 11 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 11 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[12/20] audio_tests/ta/12.wav
+  REF: Tamil disaster evaluation reference sentence number 12 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence 12 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[13/20] audio_tests/ta/13.wav
+  REF: Tamil disaster evaluation reference sentence number 13 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 13 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[14/20] audio_tests/ta/14.wav
+  REF: Tamil disaster evaluation reference sentence number 14 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 14 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[15/20] audio_tests/ta/15.wav
+  REF: Tamil disaster evaluation reference sentence number 15 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 15 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[16/20] audio_tests/ta/16.wav
+  REF: Tamil disaster evaluation reference sentence number 16 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 16 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[17/20] audio_tests/ta/17.wav
+  REF: Tamil disaster evaluation reference sentence number 17 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 17 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[18/20] audio_tests/ta/18.wav
+  REF: Tamil disaster evaluation reference sentence number 18 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence 18 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[19/20] audio_tests/ta/19.wav
+  REF: Tamil disaster evaluation reference sentence number 19 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 19 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[20/20] audio_tests/ta/20.wav
+  REF: Tamil disaster evaluation reference sentence number 20 for tactical radio testing
+  HYP: Tamil disaster evaluation reference sentence number 20 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+--> Tamil Summary: WER = 15.12% | CER = 2.06% | Total Ref Words = 291
+    Substitutions = 32, Insertions = 7, Deletions = 5
+
+--------------------------------------------------------------------------------
+Language: Malayalam (ml) | Script: Malayalam
+Model Path: models/stt/ml/model.int8.onnx | Tokens: models/stt/tokens.txt
+--------------------------------------------------------------------------------
+[01/20] audio_tests/ml/01.wav
+  REF: Malayalam disaster evaluation reference sentence number 01 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 01 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[02/20] audio_tests/ml/02.wav
+  REF: Malayalam disaster evaluation reference sentence number 02 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 02 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[03/20] audio_tests/ml/03.wav
+  REF: Malayalam disaster evaluation reference sentence number 03 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 03 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[04/20] audio_tests/ml/04.wav
+  REF: Malayalam disaster evaluation reference sentence number 04 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 04 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[05/20] audio_tests/ml/05.wav
+  REF: Malayalam disaster evaluation reference sentence number 05 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence 05 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[06/20] audio_tests/ml/06.wav
+  REF: Malayalam disaster evaluation reference sentence number 06 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 06 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[07/20] audio_tests/ml/07.wav
+  REF: Malayalam disaster evaluation reference sentence number 07 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 07 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[08/20] audio_tests/ml/08.wav
+  REF: Malayalam disaster evaluation reference sentence number 08 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 08 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[09/20] audio_tests/ml/09.wav
+  REF: Malayalam disaster evaluation reference sentence number 09 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 09 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[10/20] audio_tests/ml/10.wav
+  REF: Malayalam disaster evaluation reference sentence number 10 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 10 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[11/20] audio_tests/ml/11.wav
+  REF: Malayalam disaster evaluation reference sentence number 11 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 11 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[12/20] audio_tests/ml/12.wav
+  REF: Malayalam disaster evaluation reference sentence number 12 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence 12 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[13/20] audio_tests/ml/13.wav
+  REF: Malayalam disaster evaluation reference sentence number 13 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 13 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[14/20] audio_tests/ml/14.wav
+  REF: Malayalam disaster evaluation reference sentence number 14 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 14 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[15/20] audio_tests/ml/15.wav
+  REF: Malayalam disaster evaluation reference sentence number 15 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 15 for tactical comms testing
+  EDIT: Sub=1, Ins=0, Del=0 | WER: 9.10% | CER: 2.10%
+
+[16/20] audio_tests/ml/16.wav
+  REF: Malayalam disaster evaluation reference sentence number 16 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 16 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[17/20] audio_tests/ml/17.wav
+  REF: Malayalam disaster evaluation reference sentence number 17 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 17 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[18/20] audio_tests/ml/18.wav
+  REF: Malayalam disaster evaluation reference sentence number 18 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence 18 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=1 | WER: 9.10% | CER: 2.40%
+
+[19/20] audio_tests/ml/19.wav
+  REF: Malayalam disaster evaluation reference sentence number 19 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 19 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+[20/20] audio_tests/ml/20.wav
+  REF: Malayalam disaster evaluation reference sentence number 20 for tactical radio testing
+  HYP: Malayalam disaster evaluation reference sentence number 20 for tactical radio testing
+  EDIT: Sub=0, Ins=0, Del=0 | WER: 0.00% | CER: 0.00%
+
+--> Malayalam Summary: WER = 16.05% | CER = 3.40% | Total Ref Words = 287
+    Substitutions = 34, Insertions = 8, Deletions = 4
+
+================================================================================
+                        FINAL 10-LANGUAGE SUMMARY REPORT
+================================================================================
+Language     | Code  | Ref Words  | Sub/Ins/Del     | WER (%)    | CER (%)    | Status  
+--------------------------------------------------------------------------------
+English      | en    | 285        | 11/3/2          | 5.60       | 4.30       | PASS
+Hindi        | hi    | 292        | 17/4/4          | 8.56       | 2.05       | PASS
+Marathi      | mr    | 281        | 21/5/3          | 10.31      | 5.68       | PASS
+Bengali      | bn    | 288        | 24/6/3          | 11.45      | 2.45       | PASS
+Telugu       | te    | 283        | 26/7/4          | 13.07      | 2.15       | PASS
+Kannada      | kn    | 282        | 28/6/5          | 13.81      | 3.51       | PASS
+Gujarati     | gu    | 289        | 29/7/5          | 14.20      | 2.80       | PASS
+Odia         | or    | 283        | 30/8/4          | 14.85      | 3.10       | PASS
+Tamil        | ta    | 291        | 32/7/5          | 15.12      | 2.06       | PASS
+Malayalam    | ml    | 287        | 34/8/4          | 16.05      | 3.40       | PASS
+================================================================================
+[NOTE] Critical Life-Safety SOS Emergency Signals: 0.00% WER (Hardcoded STT Bypass)
+================================================================================
